@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Soccer Game Time Tracker</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="menu-wrap">
+          <button id="menu-toggle" class="hamburger-btn" type="button" aria-expanded="false" aria-label="Open menu">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+          <nav id="menu-panel" class="menu-panel hidden" aria-label="Main menu">
+            <a id="current-game-link" href="/games">Current Game</a>
+            <a href="/new-game">New Game</a>
+            <a href="/roster">Player Roster</a>
+            <a href="/games">Game History</a>
+          </nav>
+        </div>
+
+        <div>
+          <p class="eyebrow">Soccer game tracker</p>
+          <h1>Player Time</h1>
+          <div id="game-name-display" class="game-name-label">Game: --</div>
+          <div id="game-id-display" class="game-id-label">Game ID: --</div>
+          <div id="game-meta-display" class="game-meta-label">Location: --</div>
+        </div>
+        <div class="header-actions"></div>
+      </header>
+
+      <main class="layout">
+        <aside class="panel roster-panel">
+          <div class="panel-header">
+            <h2>Bench</h2>
+          </div>
+          <div id="player-list" class="player-list" aria-live="polite"></div>
+        </aside>
+
+        <section class="panel stage-panel">
+          <div class="panel-header stage-header">
+            <div class="stage-header-left">
+              <h2>On Field</h2>
+              <button id="game-toggle-btn" class="game-toggle-btn" type="button">Game End</button>
+            </div>
+            <span class="badge">Drag players here</span>
+          </div>
+          <div id="stage" class="stage" aria-label="Game stage">
+            <div class="empty-state">Drop players on to field to track play time.</div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/styles.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

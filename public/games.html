@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Game History</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar page-header">
+        <div class="menu-wrap">
+          <button id="menu-toggle" class="hamburger-btn" type="button" aria-expanded="false" aria-label="Open menu">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+          <nav id="menu-panel" class="menu-panel hidden" aria-label="Main menu">
+            <a id="current-game-link" href="/games">Current Game</a>
+            <a href="/new-game">New Game</a>
+            <a href="/roster">Player Roster</a>
+            <a href="/games">Game History</a>
+          </nav>
+        </div>
+        <div>
+          <p class="eyebrow">Game history</p>
+          <h1>Game History</h1>
+        </div>
+        <div class="header-actions roster-actions">
+          <a href="/new-game" class="primary-btn">Create New Game</a>
+        </div>
+      </header>
+
+      <main class="content-panel">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Game ID</th>
+              <th>Name</th>
+              <th>Location</th>
+              <th>Date</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="games-body"></tbody>
+        </table>
+      </main>
+    </div>
+
+    <script src="/styles.js"></script>
+    <script>
+      async function loadGames() {
+        const response = await fetch('/api/games');
+        if (!response.ok) {
+          throw new Error('Unable to load games.');
+        }
+
+        const { games } = await response.json();
+        const tbody = document.getElementById('games-body');
+        tbody.innerHTML = games.map((game) => `
+          <tr>
+            <td><a href="/games/${game.id}">${game.id}</a></td>
+            <td><a href="/games/${game.id}">${game.name}</a></td>
+            <td>${game.location || 'TBD'}</td>
+            <td>${game.date || 'TBD'}</td>
+            <td>${Number(game.is_active) === 1 ? 'Active' : 'Ended'}</td>
+          </tr>
+        `).join('');
+      }
+
+      document.addEventListener('DOMContentLoaded', () => {
+        initMenu();
+        loadGames().catch((error) => {
+          console.error(error);
+        });
+      });
+    </script>
+  </body>
+</html>

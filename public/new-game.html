@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>New Game</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="menu-wrap">
+          <button id="menu-toggle" class="hamburger-btn" type="button" aria-expanded="false" aria-label="Open menu">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+          <nav id="menu-panel" class="menu-panel hidden" aria-label="Main menu">
+            <a id="current-game-link" href="/games">Current Game</a>
+            <a href="/new-game">New Game</a>
+            <a href="/roster">Player Roster</a>
+            <a href="/games">Game History</a>
+          </nav>
+        </div>
+
+        <div>
+          <p class="eyebrow">Game setup</p>
+          <h1>New Game</h1>
+        </div>
+        <div class="header-actions"></div>
+      </header>
+
+      <section class="game-form-panel">
+        <form id="game-form" class="game-form">
+          <div class="field-group">
+            <label for="game-name">Game Name</label>
+            <input id="game-name" name="name" type="text" value="vs " placeholder="vs Team Name" />
+          </div>
+
+          <div class="field-group">
+            <label for="game-location">Location</label>
+            <input id="game-location" name="location" type="text" placeholder="Field name or city" />
+          </div>
+
+          <div class="field-group date-group">
+            <label>Date</label>
+            <div class="date-selects">
+              <select id="game-month" name="month">
+                <option value="">Month</option>
+                <option value="1">January</option>
+                <option value="2">February</option>
+                <option value="3">March</option>
+                <option value="4">April</option>
+                <option value="5">May</option>
+                <option value="6">June</option>
+                <option value="7">July</option>
+                <option value="8">August</option>
+                <option value="9">September</option>
+                <option value="10">October</option>
+                <option value="11">November</option>
+                <option value="12">December</option>
+              </select>
+              <select id="game-day" name="day">
+                <option value="">Day</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+                <option value="9">9</option>
+                <option value="10">10</option>
+                <option value="11">11</option>
+                <option value="12">12</option>
+                <option value="13">13</option>
+                <option value="14">14</option>
+                <option value="15">15</option>
+                <option value="16">16</option>
+                <option value="17">17</option>
+                <option value="18">18</option>
+                <option value="19">19</option>
+                <option value="20">20</option>
+                <option value="21">21</option>
+                <option value="22">22</option>
+                <option value="23">23</option>
+                <option value="24">24</option>
+                <option value="25">25</option>
+                <option value="26">26</option>
+                <option value="27">27</option>
+                <option value="28">28</option>
+                <option value="29">29</option>
+                <option value="30">30</option>
+                <option value="31">31</option>
+              </select>
+              <select id="game-year" name="year">
+                <option value="">Year</option>
+                <option value="2024">2024</option>
+                <option value="2025">2025</option>
+                <option value="2026">2026</option>
+                <option value="2027">2027</option>
+              </select>
+            </div>
+          </div>
+
+          <button type="submit" class="primary-btn">Create Game</button>
+        </form>
+      </section>
+    </div>
+
+    <script src="/styles.js"></script>
+    <script>
+      function initializeDateDefaults() {
+        const today = new Date();
+        const monthEl = document.getElementById('game-month');
+        const dayEl = document.getElementById('game-day');
+        const yearEl = document.getElementById('game-year');
+
+        if (monthEl) monthEl.value = String(today.getMonth() + 1);
+        if (dayEl) dayEl.value = String(today.getDate());
+        if (yearEl) yearEl.value = String(today.getFullYear());
+      }
+
+      async function createGame(event) {
+        event.preventDefault();
+
+        const form = event.currentTarget;
+        const formData = new FormData(form);
+        const payload = {
+          name: formData.get('name')?.trim() || 'vs Team',
+          location: formData.get('location')?.trim(),
+          month: formData.get('month'),
+          day: formData.get('day'),
+          year: formData.get('year')
+        };
+
+        if (!payload.location || !payload.month || !payload.day || !payload.year) {
+          alert('Please enter a location and select a month, day, and year for the game.');
+          return;
+        }
+
+        const response = await fetch('/api/games', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          alert(errorData.message || 'Unable to create the game.');
+          return;
+        }
+
+        const { game } = await response.json();
+        form.reset();
+        window.location.href = `/games/${game.id}`;
+      }
+
+      document.addEventListener('DOMContentLoaded', () => {
+        initMenu();
+        initializeDateDefaults();
+        const form = document.getElementById('game-form');
+        if (form) {
+          form.addEventListener('submit', createGame);
+        }
+      });
+    </script>
+  </body>
+</html>

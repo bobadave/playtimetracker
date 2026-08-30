@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Player Roster</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar page-header">
+        <div class="menu-wrap">
+          <button id="menu-toggle" class="hamburger-btn" type="button" aria-expanded="false" aria-label="Open menu">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+          <nav id="menu-panel" class="menu-panel hidden" aria-label="Main menu">
+            <a id="current-game-link" href="/games">Current Game</a>
+            <a href="/new-game">New Game</a>
+            <a href="/roster">Player Roster</a>
+            <a href="/games">Game History</a>
+          </nav>
+        </div>
+        <div>
+          <p class="eyebrow">Team roster</p>
+          <h1>Player Roster</h1>
+        </div>
+        <div class="header-actions roster-actions">
+          <button id="add-player-btn" class="primary-btn" type="button">Add Player</button>
+        </div>
+      </header>
+
+      <main class="content-panel">
+        <section class="roster-chart-card">
+          <div class="chart-header">
+            <h2>Play Distribution</h2>
+          </div>
+          <div class="chart-layout">
+            <div id="roster-pie-chart" class="roster-pie-chart" aria-label="Player cumulative play time by player"></div>
+            <ul id="roster-chart-legend" class="chart-legend"></ul>
+          </div>
+        </section>
+
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>First Name</th>
+              <th>Last Name</th>
+              <th>Cumulative Time</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="roster-body"></tbody>
+        </table>
+        <div class="roster-footer">
+          <button id="unarchive-btn" class="secondary-btn hidden" type="button">Unarchive Players</button>
+        </div>
+      </main>
+    </div>
+
+    <div id="player-modal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-modal="true"></div>
+      <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="player-modal-title">
+        <div class="modal-header">
+          <h2 id="player-modal-title">Add Player</h2>
+          <button id="close-player-modal" class="icon-btn" type="button" aria-label="Close add player dialog">×</button>
+        </div>
+        <form id="player-form" class="player-form">
+          <div class="field-group">
+            <label for="player-first-name">First Name</label>
+            <input id="player-first-name" name="firstName" type="text" required />
+          </div>
+          <div class="field-group">
+            <label for="player-last-name">Last Name</label>
+            <input id="player-last-name" name="lastName" type="text" required />
+          </div>
+          <div class="modal-actions">
+            <button type="button" id="cancel-player-btn" class="secondary-btn">Cancel</button>
+            <button type="submit" class="primary-btn">Save Player</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="/styles.js"></script>
+    <script>
+      const state = {
+        editingPlayerId: null,
+        archivedCount: 0
+      };
+
+      function escapeHtml(value = '') {
+        return String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/\"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function formatDuration(totalSeconds) {
+        const total = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+        const minutes = Math.floor(total / 60);
+        const seconds = total % 60;
+        return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+      }
+
+      function renderRosterChart(players) {
+        const chartEl = document.getElementById('roster-pie-chart');
+        const legendEl = document.getElementById('roster-chart-legend');
+        const visiblePlayers = players.filter((player) => !player.archive);
+        const totalSeconds = visiblePlayers.reduce((sum, player) => sum + (Number(player.cumulativeSeconds) || 0), 0);
+
+        if (!visiblePlayers.length || totalSeconds <= 0) {
+          chartEl.style.background = 'conic-gradient(#dfe7f3 0 100%)';
+          legendEl.innerHTML = '<li class="chart-empty">No playing time recorded yet.</li>';
+          return;
+        }
+
+        const palette = ['#768db0', '#74a57f', '#c7ae62', '#ba7f7f', '#7f9bb8', '#8c8eb8', '#c4976d', '#8ba37d'];
+        let start = 0;
+        const segments = visiblePlayers.map((player, index) => {
+          const value = Number(player.cumulativeSeconds) || 0;
+          const share = value / totalSeconds;
+          const end = start + share;
+          const color = palette[index % palette.length];
+          const segment = `${color} ${start * 100}% ${end * 100}%`;
+          start = end;
+          return segment;
+        });
+
+        chartEl.style.background = `conic-gradient(${segments.join(', ')})`;
+        legendEl.innerHTML = visiblePlayers
+          .map((player, index) => {
+            const value = Number(player.cumulativeSeconds) || 0;
+            const share = totalSeconds > 0 ? (value / totalSeconds) * 100 : 0;
+            const playerName = `${player.firstName} ${player.lastName}`.trim();
+            return `
+              <li class="chart-item">
+                <span class="chart-swatch" style="background:${palette[index % palette.length]};"></span>
+                <span class="chart-label">${escapeHtml(playerName)}</span>
+                <span class="chart-value">${share.toFixed(1)}%</span>
+              </li>
+            `;
+          })
+          .join('');
+      }
+
+      function renderRoster(players) {
+        const tbody = document.getElementById('roster-body');
+        const unarchiveBtn = document.getElementById('unarchive-btn');
+        const visiblePlayers = players.filter((player) => !player.archive);
+        const archivedPlayers = players.filter((player) => player.archive);
+
+        state.archivedCount = archivedPlayers.length;
+        unarchiveBtn.classList.toggle('hidden', archivedPlayers.length === 0);
+        renderRosterChart(players);
+
+        tbody.innerHTML = visiblePlayers.map((player) => {
+          const editing = Number(state.editingPlayerId) === Number(player.id);
+
+          return `
+            <tr>
+              <td>${player.id}</td>
+              <td>${editing ? `<input class="inline-input" data-field="firstName" value="${escapeHtml(player.firstName)}" />` : escapeHtml(player.firstName)}</td>
+              <td>${editing ? `<input class="inline-input" data-field="lastName" value="${escapeHtml(player.lastName)}" />` : escapeHtml(player.lastName)}</td>
+              <td>${formatDuration(player.cumulativeSeconds ?? player.totalSeconds)}</td>
+              <td class="row-actions">
+                ${editing
+                  ? `<button type="button" class="primary-btn small-btn" data-action="update" data-player-id="${player.id}">Update</button>
+                     <button type="button" class="danger-btn small-btn" data-action="delete" data-player-id="${player.id}">Delete</button>`
+                  : `<button type="button" class="secondary-btn small-btn" data-action="edit" data-player-id="${player.id}">Edit</button>`}
+              </td>
+            </tr>
+          `;
+        }).join('');
+      }
+
+      async function loadRoster() {
+        const response = await fetch('/api/players?includeArchived=true');
+        if (!response.ok) {
+          throw new Error('Unable to load roster.');
+        }
+
+        const players = await response.json();
+        renderRoster(players);
+      }
+
+      async function updatePlayer(playerId, payload) {
+        const response = await fetch(`/api/players/${playerId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.message || 'Unable to update player.');
+        }
+      }
+
+      async function archivePlayer(playerId) {
+        await updatePlayer(playerId, { archive: true });
+      }
+
+      async function unarchivePlayers() {
+        const response = await fetch('/api/players/unarchive', { method: 'PUT' });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.message || 'Unable to unarchive players.');
+        }
+
+        state.editingPlayerId = null;
+        await loadRoster();
+      }
+
+      function openPlayerModal() {
+        const modal = document.getElementById('player-modal');
+        modal.classList.remove('hidden');
+        modal.setAttribute('aria-hidden', 'false');
+        document.getElementById('player-first-name').focus();
+      }
+
+      function closePlayerModal() {
+        const modal = document.getElementById('player-modal');
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+        const form = document.getElementById('player-form');
+        form.reset();
+      }
+
+      async function handleAddPlayer(event) {
+        event.preventDefault();
+
+        const form = event.currentTarget;
+        const formData = new FormData(form);
+        const payload = {
+          firstName: String(formData.get('firstName') || '').trim(),
+          lastName: String(formData.get('lastName') || '').trim()
+        };
+
+        if (!payload.firstName || !payload.lastName) {
+          alert('Please enter both a first and last name.');
+          return;
+        }
+
+        const response = await fetch('/api/players', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          alert(errorData.message || 'Unable to add player.');
+          return;
+        }
+
+        closePlayerModal();
+        await loadRoster();
+      }
+
+      async function handleRosterAction(event) {
+        const button = event.target.closest('button[data-action]');
+        if (!button) {
+          return;
+        }
+
+        const playerId = Number(button.dataset.playerId);
+        const action = button.dataset.action;
+
+        if (action === 'edit') {
+          state.editingPlayerId = playerId;
+          await loadRoster();
+          return;
+        }
+
+        if (action === 'update') {
+          const row = button.closest('tr');
+          const firstName = row.querySelector('[data-field="firstName"]').value.trim();
+          const lastName = row.querySelector('[data-field="lastName"]').value.trim();
+
+          if (!firstName || !lastName) {
+            alert('First name and last name cannot be empty.');
+            return;
+          }
+
+          try {
+            await updatePlayer(playerId, { firstName, lastName });
+            state.editingPlayerId = null;
+            await loadRoster();
+          } catch (error) {
+            alert(error.message);
+          }
+          return;
+        }
+
+        if (action === 'delete') {
+          try {
+            await archivePlayer(playerId);
+            state.editingPlayerId = null;
+            await loadRoster();
+          } catch (error) {
+            alert(error.message);
+          }
+        }
+      }
+
+      document.addEventListener('DOMContentLoaded', () => {
+        initMenu();
+        document.getElementById('add-player-btn').addEventListener('click', openPlayerModal);
+        document.getElementById('close-player-modal').addEventListener('click', closePlayerModal);
+        document.getElementById('cancel-player-btn').addEventListener('click', closePlayerModal);
+        document.getElementById('player-form').addEventListener('submit', handleAddPlayer);
+        document.getElementById('player-modal').addEventListener('click', (event) => {
+          if (event.target.dataset.closeModal === 'true') {
+            closePlayerModal();
+          }
+        });
+        document.getElementById('roster-body').addEventListener('click', handleRosterAction);
+        document.getElementById('unarchive-btn').addEventListener('click', async () => {
+          try {
+            await unarchivePlayers();
+          } catch (error) {
+            alert(error.message);
+          }
+        });
+
+        loadRoster().catch((error) => {
+          console.error(error);
+        });
+      });
+    </script>
+  </body>
+</html>
