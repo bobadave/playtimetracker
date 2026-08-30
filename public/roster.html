@@ -16,15 +16,15 @@
             <span></span>
           </button>
           <nav id="menu-panel" class="menu-panel hidden" aria-label="Main menu">
-            <a id="current-game-link" href="/games">Current Game</a>
-            <a href="/new-game">New Game</a>
-            <a href="/roster">Player Roster</a>
-            <a href="/games">Game History</a>
+            <a href="/teams">Teams</a>
+            <a id="roster-link" href="/t1/roster">Player Roster</a>
+            <a id="games-link" href="/t1/games">Games</a>
           </nav>
         </div>
         <div>
           <p class="eyebrow">Team roster</p>
           <h1>Player Roster</h1>
+          <div id="team-name-display" class="game-name-label">Team: --</div>
         </div>
         <div class="header-actions roster-actions">
           <button id="add-player-btn" class="primary-btn" type="button">Add Player</button>
@@ -88,7 +88,8 @@
     <script>
       const state = {
         editingPlayerId: null,
-        archivedCount: 0
+        archivedCount: 0,
+        currentTeamId: 1
       };
 
       function escapeHtml(value = '') {
@@ -148,6 +149,31 @@
           .join('');
       }
 
+      function renderTeamName(teamName) {
+        const teamNameDisplay = document.getElementById('team-name-display');
+        if (teamNameDisplay) {
+          teamNameDisplay.textContent = `Team: ${teamName || 'Default Team'}`;
+        }
+      }
+
+      async function loadTeams() {
+        const response = await fetch('/api/teams');
+        if (!response.ok) {
+          throw new Error('Unable to load teams.');
+        }
+
+        const { teams } = await response.json();
+        const pathTeamId = getTeamIdFromPath();
+        const selectedTeamId = Number(pathTeamId ?? state.currentTeamId ?? teams[0]?.id ?? 1);
+        state.currentTeamId = Number.isFinite(selectedTeamId) ? selectedTeamId : 1;
+        const selectedTeam = teams.find((team) => Number(team.id) === Number(state.currentTeamId)) || teams[0];
+
+        if (selectedTeam) {
+          state.currentTeamId = Number(selectedTeam.id);
+          renderTeamName(selectedTeam.teamName);
+        }
+      }
+
       function renderRoster(players) {
         const tbody = document.getElementById('roster-body');
         const unarchiveBtn = document.getElementById('unarchive-btn');
@@ -179,7 +205,7 @@
       }
 
       async function loadRoster() {
-        const response = await fetch('/api/players?includeArchived=true');
+        const response = await fetch(`/api/players?includeArchived=true&teamId=${state.currentTeamId}`);
         if (!response.ok) {
           throw new Error('Unable to load roster.');
         }
@@ -240,7 +266,8 @@
         const formData = new FormData(form);
         const payload = {
           firstName: String(formData.get('firstName') || '').trim(),
-          lastName: String(formData.get('lastName') || '').trim()
+          lastName: String(formData.get('lastName') || '').trim(),
+          teamId: state.currentTeamId
         };
 
         if (!payload.firstName || !payload.lastName) {
@@ -312,6 +339,27 @@
         }
       }
 
+      function getTeamIdFromPath() {
+        const match = window.location.pathname.match(/^\/t(\d+)\/roster$/);
+        return match ? Number(match[1]) : null;
+      }
+
+      async function updateTeamRoster(teamId) {
+        state.currentTeamId = Number(teamId) || 1;
+        const teamResponse = await fetch(`/api/teams/${state.currentTeamId}`);
+        if (teamResponse.ok) {
+          const { team } = await teamResponse.json();
+          renderTeamName(team ? team.team_name : 'Default Team');
+        }
+
+        const nextPath = `/t${state.currentTeamId}/roster`;
+        if (window.location.pathname !== nextPath) {
+          window.history.replaceState({}, '', nextPath);
+        }
+
+        await loadRoster();
+      }
+
       document.addEventListener('DOMContentLoaded', () => {
         initMenu();
         document.getElementById('add-player-btn').addEventListener('click', openPlayerModal);
@@ -332,9 +380,11 @@
           }
         });
 
-        loadRoster().catch((error) => {
-          console.error(error);
-        });
+        loadTeams()
+          .then(() => loadRoster())
+          .catch((error) => {
+            console.error(error);
+          });
       });
     </script>
   </body>

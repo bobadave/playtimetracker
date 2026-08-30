@@ -66,3 +66,66 @@ test('createDbApi initializes the default game and player schema for a fresh dat
     });
   }
 });
+
+test('createDbApi upgrades an existing database that is missing team_id columns', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'playtimetracker-'));
+  const tempDbPath = path.join(tempDir, 'legacy_game_time_tracker.db');
+  const dbApi = createDbApi(tempDbPath);
+
+  await dbApi.run(`
+    CREATE TABLE games (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))
+    )
+  `);
+  await dbApi.run(`
+    CREATE TABLE players (
+      id INTEGER PRIMARY KEY,
+      first_name TEXT NOT NULL,
+      last_name TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+  await dbApi.run(`
+    CREATE TABLE teams (
+      id INTEGER PRIMARY KEY,
+      team_name TEXT NOT NULL,
+      user_admin_id INTEGER
+    )
+  `);
+  await dbApi.run(`
+    CREATE TABLE schema_migrations (
+      version TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    )
+  `);
+  await dbApi.run('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)', ['2026-08-30-bootstrap', new Date().toISOString()]);
+  await dbApi.run('INSERT INTO games (id, name, created_at, is_active) VALUES (?, ?, ?, ?)', [1, 'Legacy Game', new Date().toISOString(), 1]);
+
+  await dbApi.initialize();
+
+  const gameInfo = await dbApi.all('PRAGMA table_info(games)');
+  const playerInfo = await dbApi.all('PRAGMA table_info(players)');
+
+  assert.ok(gameInfo.some((column) => column.name === 'team_id'));
+  assert.ok(playerInfo.some((column) => column.name === 'team_id'));
+
+  const defaultTeam = await dbApi.get('SELECT team_name FROM teams WHERE id = 1');
+  assert.equal(defaultTeam.team_name, 'Default Team');
+
+  const updatedGame = await dbApi.get('SELECT team_id FROM games WHERE id = 1');
+  assert.equal(Number(updatedGame.team_id), 1);
+
+  await new Promise((resolve, reject) => {
+    dbApi.db.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+});

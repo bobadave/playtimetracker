@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Teams</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar page-header">
+        <div class="menu-wrap">
+          <button id="menu-toggle" class="hamburger-btn" type="button" aria-expanded="false" aria-label="Open menu">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+          <nav id="menu-panel" class="menu-panel hidden" aria-label="Main menu">
+            <a href="/teams">Teams</a>
+            <a id="roster-link" href="/t1/roster">Player Roster</a>
+            <a id="games-link" href="/t1/games">Games</a>
+          </nav>
+        </div>
+        <div>
+          <p class="eyebrow">Teams</p>
+          <h1>Teams</h1>
+        </div>
+        <div class="header-actions roster-actions">
+          <button id="new-team-btn" class="primary-btn" type="button">Create New Team</button>
+        </div>
+      </header>
+
+      <main class="content-panel">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Team Name</th>
+              <th>Players</th>
+              <th>Games</th>
+            </tr>
+          </thead>
+          <tbody id="teams-body"></tbody>
+        </table>
+      </main>
+    </div>
+
+    <div id="team-modal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-modal="true"></div>
+      <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="team-modal-title">
+        <div class="modal-header">
+          <h2 id="team-modal-title">Create New Team</h2>
+          <button id="close-team-modal" class="icon-btn" type="button" aria-label="Close team dialog">×</button>
+        </div>
+        <form id="team-form" class="player-form">
+          <div class="field-group">
+            <label for="team-name">Team Name</label>
+            <input id="team-name" name="teamName" type="text" required />
+          </div>
+          <div class="modal-actions">
+            <button type="button" id="cancel-team-btn" class="secondary-btn">Cancel</button>
+            <button type="submit" class="primary-btn">Save Team</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="/styles.js"></script>
+    <script>
+      function escapeHtml(value = '') {
+        return String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/\"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function openTeamModal() {
+        const modal = document.getElementById('team-modal');
+        modal.classList.remove('hidden');
+        modal.setAttribute('aria-hidden', 'false');
+        document.getElementById('team-name').focus();
+      }
+
+      function closeTeamModal() {
+        const modal = document.getElementById('team-modal');
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+        const form = document.getElementById('team-form');
+        form.reset();
+      }
+
+      async function createTeam(event) {
+        event.preventDefault();
+
+        const formData = new FormData(event.currentTarget);
+        const teamName = String(formData.get('teamName') || '').trim();
+
+        if (!teamName) {
+          alert('Please enter a team name.');
+          return;
+        }
+
+        const response = await fetch('/api/teams', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ teamName })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          alert(errorData.message || 'Unable to create team.');
+          return;
+        }
+
+        closeTeamModal();
+        await loadTeams();
+      }
+
+      async function loadTeams() {
+        const response = await fetch('/api/teams');
+        if (!response.ok) {
+          throw new Error('Unable to load teams.');
+        }
+
+        const { teams = [] } = await response.json();
+        const tableBody = document.getElementById('teams-body');
+        const sortedTeams = [...teams].sort((a, b) => String(a.teamName || '').localeCompare(String(b.teamName || '')));
+
+        tableBody.innerHTML = sortedTeams.map((team) => `
+          <tr>
+            <td><a href="/t${team.id}/games">${escapeHtml(team.teamName)}</a></td>
+            <td><a href="/t${team.id}/roster" class="secondary-btn small-btn">${team.playerCount} on roster</a></td>
+            <td><a href="/t${team.id}/games" class="secondary-btn small-btn">${team.gameCount} games</a></td>
+          </tr>
+        `).join('');
+      }
+
+      document.addEventListener('DOMContentLoaded', () => {
+        initMenu();
+        updateCurrentGameLink();
+
+        document.getElementById('new-team-btn').addEventListener('click', openTeamModal);
+        document.getElementById('close-team-modal').addEventListener('click', closeTeamModal);
+        document.getElementById('cancel-team-btn').addEventListener('click', closeTeamModal);
+        document.getElementById('team-form').addEventListener('submit', createTeam);
+        document.getElementById('team-modal').addEventListener('click', (event) => {
+          if (event.target.dataset.closeModal === 'true') {
+            closeTeamModal();
+          }
+        });
+
+        loadTeams().catch((error) => {
+          console.error(error);
+        });
+      });
+    </script>
+  </body>
+</html>

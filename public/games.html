@@ -16,23 +16,27 @@
             <span></span>
           </button>
           <nav id="menu-panel" class="menu-panel hidden" aria-label="Main menu">
-            <a id="current-game-link" href="/games">Current Game</a>
-            <a href="/new-game">New Game</a>
-            <a href="/roster">Player Roster</a>
-            <a href="/games">Game History</a>
+            <a href="/teams">Teams</a>
+            <a id="roster-link" href="/t1/roster">Player Roster</a>
+            <a id="games-link" href="/t1/games">Games</a>
           </nav>
         </div>
         <div>
           <p class="eyebrow">Game history</p>
           <h1>Game History</h1>
+          <div id="team-name-display" class="game-name-label">Team: --</div>
         </div>
         <div class="header-actions roster-actions">
-          <a href="/new-game" class="primary-btn">Create New Game</a>
+          <a id="new-game-link" href="/t1/new-game" class="primary-btn">Create New Game</a>
         </div>
       </header>
 
       <main class="content-panel">
-        <table class="data-table">
+        <div id="games-empty-state" class="empty-state hidden">
+          <p>No games yet for this team. Create a new game to get started.</p>
+          <a id="empty-games-create-link" href="/t1/new-game" class="primary-btn">Create New Game</a>
+        </div>
+        <table id="games-table" class="data-table">
           <thead>
             <tr>
               <th>Game ID</th>
@@ -49,27 +53,72 @@
 
     <script src="/styles.js"></script>
     <script>
+      function getCurrentTeamId() {
+        const match = window.location.pathname.match(/^\/t(\d+)\/games$/);
+        return match ? Number(match[1]) : 1;
+      }
+
       async function loadGames() {
-        const response = await fetch('/api/games');
+        const teamId = getCurrentTeamId();
+        const newGameLink = document.getElementById('new-game-link');
+        const emptyGamesLink = document.getElementById('empty-games-create-link');
+        const teamNameDisplay = document.getElementById('team-name-display');
+        if (newGameLink) {
+          newGameLink.href = `/t${teamId}/new-game`;
+        }
+        if (emptyGamesLink) {
+          emptyGamesLink.href = `/t${teamId}/new-game`;
+        }
+
+        const teamResponse = await fetch(`/api/teams/${teamId}`);
+        let teamName = 'Default Team';
+        if (teamResponse.ok) {
+          const { team } = await teamResponse.json();
+          if (team && team.team_name) {
+            teamName = team.team_name;
+          }
+        }
+
+        if (teamNameDisplay) {
+          teamNameDisplay.textContent = `Team: ${teamName}`;
+        }
+
+        const response = await fetch(`/api/games?teamId=${teamId}`);
         if (!response.ok) {
           throw new Error('Unable to load games.');
         }
 
         const { games } = await response.json();
         const tbody = document.getElementById('games-body');
-        tbody.innerHTML = games.map((game) => `
-          <tr>
-            <td><a href="/games/${game.id}">${game.id}</a></td>
-            <td><a href="/games/${game.id}">${game.name}</a></td>
-            <td>${game.location || 'TBD'}</td>
-            <td>${game.date || 'TBD'}</td>
-            <td>${Number(game.is_active) === 1 ? 'Active' : 'Ended'}</td>
-          </tr>
-        `).join('');
+        const table = document.getElementById('games-table');
+        const emptyState = document.getElementById('games-empty-state');
+
+        if (games.length === 0) {
+          tbody.innerHTML = '';
+          table.classList.add('hidden');
+          emptyState.classList.remove('hidden');
+          return;
+        }
+
+        table.classList.remove('hidden');
+        emptyState.classList.add('hidden');
+        tbody.innerHTML = games.map((game) => {
+          const href = `/t${teamId}/games/${game.id}`;
+          return `
+            <tr>
+              <td><a href="${href}">${game.id}</a></td>
+              <td><a href="${href}">${game.name}</a></td>
+              <td>${game.location || 'TBD'}</td>
+              <td>${game.date || 'TBD'}</td>
+              <td>${Number(game.is_active) === 1 ? 'Active' : 'Ended'}</td>
+            </tr>
+          `;
+        }).join('');
       }
 
       document.addEventListener('DOMContentLoaded', () => {
         initMenu();
+        updateTeamScopedMenuLinks();
         loadGames().catch((error) => {
           console.error(error);
         });

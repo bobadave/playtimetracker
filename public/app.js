@@ -2,13 +2,14 @@ const playerListEl = document.getElementById('player-list');
 const stageEl = document.getElementById('stage');
 const gameIdDisplayEl = document.getElementById('game-id-display');
 const gameNameDisplayEl = document.getElementById('game-name-display');
+const teamNameDisplayEl = document.getElementById('team-name-display');
 const gameMetaDisplayEl = document.getElementById('game-meta-display');
 const gameToggleBtn = document.getElementById('game-toggle-btn');
 const gameFormEl = document.getElementById('game-form');
 let isGameActive = true;
 
 function getCurrentGameId() {
-  const match = window.location.pathname.match(/\/games\/(\d+)/);
+  const match = window.location.pathname.match(/\/t\d+\/games\/(\d+)/) || window.location.pathname.match(/\/games\/(\d+)/);
   return match ? Number(match[1]) : 1;
 }
 
@@ -24,7 +25,14 @@ async function fetchCurrentGame() {
 
 async function fetchPlayers() {
   const gameId = getCurrentGameId();
-  const response = await fetch(`/api/players/${gameId}`);
+  const gameResponse = await fetch(`/api/game/${gameId}`);
+  if (!gameResponse.ok) {
+    throw new Error('Unable to load game details.');
+  }
+
+  const { game } = await gameResponse.json();
+  const teamId = game && game.team_id ? game.team_id : 1;
+  const response = await fetch(`/api/players/${gameId}?teamId=${teamId}`);
   if (!response.ok) {
     throw new Error('Unable to load players.');
   }
@@ -103,8 +111,10 @@ function renderGameHeader(game) {
   const gameName = game && game.name ? game.name : 'Untitled Game';
   const location = game && game.location ? game.location : 'TBD';
   const date = game && game.date ? game.date : 'TBD';
+  const teamName = game && (game.team_name || game.teamName) ? (game.team_name || game.teamName) : 'Default Team';
 
   gameNameDisplayEl.textContent = `Game: ${gameName}`;
+  teamNameDisplayEl.textContent = `Team: ${teamName}`;
   gameIdDisplayEl.textContent = `Game ID: ${gameId}`;
   gameMetaDisplayEl.textContent = `Location: ${location} • ${date}`;
   isGameActive = !!(game && Number(game.is_active) !== 0);

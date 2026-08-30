@@ -16,10 +16,9 @@
             <span></span>
           </button>
           <nav id="menu-panel" class="menu-panel hidden" aria-label="Main menu">
-            <a id="current-game-link" href="/games">Current Game</a>
-            <a href="/new-game">New Game</a>
-            <a href="/roster">Player Roster</a>
-            <a href="/games">Game History</a>
+            <a href="/teams">Teams</a>
+            <a id="roster-link" href="/t1/roster">Player Roster</a>
+            <a id="games-link" href="/t1/games">Games</a>
           </nav>
         </div>
 
@@ -111,6 +110,11 @@
 
     <script src="/styles.js"></script>
     <script>
+      function getCurrentTeamIdFromPath() {
+        const match = window.location.pathname.match(/^\/t(\d+)\/new-game$/);
+        return match ? Number(match[1]) : 1;
+      }
+
       function initializeDateDefaults() {
         const today = new Date();
         const monthEl = document.getElementById('game-month');
@@ -127,12 +131,14 @@
 
         const form = event.currentTarget;
         const formData = new FormData(form);
+        const teamId = getCurrentTeamIdFromPath();
         const payload = {
           name: formData.get('name')?.trim() || 'vs Team',
           location: formData.get('location')?.trim(),
           month: formData.get('month'),
           day: formData.get('day'),
-          year: formData.get('year')
+          year: formData.get('year'),
+          team_id: teamId
         };
 
         if (!payload.location || !payload.month || !payload.day || !payload.year) {
@@ -156,11 +162,12 @@
 
         const { game } = await response.json();
         form.reset();
-        window.location.href = `/games/${game.id}`;
+        window.location.href = `/t${teamId}/games/${game.id}`;
       }
 
       document.addEventListener('DOMContentLoaded', () => {
         initMenu();
+        updateTeamScopedMenuLinks();
         initializeDateDefaults();
         const form = document.getElementById('game-form');
         if (form) {

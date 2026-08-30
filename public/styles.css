@@ -238,6 +238,26 @@ button, input {
   padding: 20px;
 }
 
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 220px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 1.05rem;
+  font-weight: 600;
+  padding: 20px;
+}
+
+.empty-state p {
+  margin: 0;
+  max-width: 420px;
+  line-height: 1.5;
+}
+
 .roster-chart-card {
   padding: 18px 20px 10px;
   margin-bottom: 18px;
@@ -327,13 +347,20 @@ button, input {
 .secondary-btn {
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: #ffffff;
+  background: #dfeeff;
   color: var(--ink);
   padding: 12px 18px;
   font-size: 0.95rem;
   font-weight: 700;
   cursor: pointer;
 }
+
+ a.secondary-btn,
+ a.secondary-btn:hover,
+ a.secondary-btn:visited,
+ a.secondary-btn:active {
+  text-decoration: none;
+ }
 
 .modal {
   position: fixed;
