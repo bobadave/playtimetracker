@@ -32,6 +32,15 @@ async function fetchPlayers() {
   return response.json();
 }
 
+function escapeHtml(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function formatMinutes(totalSeconds) {
   const total = Math.max(0, Math.floor(Number(totalSeconds)));
   const minutes = Math.floor(total / 60);
@@ -139,7 +148,7 @@ function renderPlayers(players) {
       stagePlayer.draggable = true;
       stagePlayer.innerHTML = `
         <div class="player-meta">
-          <span class="player-name">${player.fullName}</span>
+          <span class="player-name">${escapeHtml(player.fullName)}</span>
           <span class="status-pill active">On field</span>
         </div>
         <div class="time-box">
@@ -170,7 +179,7 @@ function renderPlayers(players) {
     playerCard.draggable = true;
     playerCard.innerHTML = `
       <div class="player-meta">
-        <span class="player-name">${player.fullName}</span>
+        <span class="player-name">${escapeHtml(player.fullName)}</span>
         <span class="status-pill ${player.inStage ? 'active' : 'inactive'}">${player.inStage ? 'On field' : 'Bench'}</span>
       </div>
       <div class="time-box">
@@ -346,7 +355,7 @@ async function initializeApp() {
     } catch (error) {
       console.error('Error refreshing player data:', error);
     }
-  }, 2000);
+  }, 10000);
 }
 
 initializeApp();

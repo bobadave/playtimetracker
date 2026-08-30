@@ -13,55 +13,14 @@ function resolveGameId(gameId) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_GAME_ID;
 }
 
-async function getPlayerSummary(playerId, gameId) {
-  const resolvedGameId = resolveGameId(gameId);
-  const rows = await db.all(
-    'SELECT * FROM player_activity WHERE game_id = ? AND player_id = ? ORDER BY timestamp ASC',
-    [resolvedGameId, playerId]
-  );
-
+function summarizeActivityRows(rows, now = Date.now()) {
   let totalMs = 0;
   let activeStart = null;
 
   for (const row of rows) {
     const timestampMs = new Date(row.timestamp).getTime();
 
-    if (row.in_play === 1) {
-      activeStart = timestampMs;
-      continue;
-    }
-
-    if (activeStart !== null) {
-      totalMs += timestampMs - activeStart;
-      activeStart = null;
-    }
-  }
-
-  const lastRow = rows[rows.length - 1];
-  const isInStage = !!lastRow && Number(lastRow.in_play) === 1;
-
-  if (isInStage && activeStart !== null) {
-    totalMs += Date.now() - activeStart;
-  }
-
-  const totalSeconds = Math.max(0, totalMs / 1000);
-
-  return { totalSeconds, isInStage };
-}
-
-async function getCumulativePlayerSeconds(playerId) {
-  const rows = await db.all(
-    'SELECT * FROM player_activity WHERE player_id = ? ORDER BY timestamp ASC',
-    [playerId]
-  );
-
-  let totalMs = 0;
-  let activeStart = null;
-
-  for (const row of rows) {
-    const timestampMs = new Date(row.timestamp).getTime();
-
-    if (row.in_play === 1) {
+    if (Number(row.in_play) === 1) {
       activeStart = timestampMs;
       continue;
     }
@@ -74,10 +33,81 @@ async function getCumulativePlayerSeconds(playerId) {
 
   const lastRow = rows[rows.length - 1];
   if (lastRow && Number(lastRow.in_play) === 1 && activeStart !== null) {
-    totalMs += Date.now() - activeStart;
+    totalMs += now - activeStart;
   }
 
   return Math.max(0, totalMs / 1000);
+}
+
+async function getPlayerSummary(playerId, gameId) {
+  const resolvedGameId = resolveGameId(gameId);
+  const rows = await db.all(
+    'SELECT * FROM player_activity WHERE game_id = ? AND player_id = ? ORDER BY timestamp ASC',
+    [resolvedGameId, playerId]
+  );
+
+  const lastRow = rows[rows.length - 1];
+  return {
+    totalSeconds: summarizeActivityRows(rows),
+    isInStage: !!lastRow && Number(lastRow.in_play) === 1
+  };
+}
+
+async function getCumulativePlayerSeconds(playerId) {
+  const rows = await db.all(
+    'SELECT * FROM player_activity WHERE player_id = ? ORDER BY timestamp ASC',
+    [playerId]
+  );
+
+  return summarizeActivityRows(rows);
+}
+
+async function getActivitySummaryMap(gameId) {
+  const resolvedGameId = resolveGameId(gameId);
+  const rows = await db.all(
+    'SELECT * FROM player_activity WHERE game_id = ? ORDER BY player_id ASC, timestamp ASC',
+    [resolvedGameId]
+  );
+
+  const grouped = new Map();
+  for (const row of rows) {
+    const key = Number(row.player_id);
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
+    }
+
+    grouped.get(key).push(row);
+  }
+
+  return Object.fromEntries(
+    Array.from(grouped.entries()).map(([playerId, playerRows]) => {
+      const lastRow = playerRows[playerRows.length - 1];
+      return [String(playerId), {
+        totalSeconds: summarizeActivityRows(playerRows),
+        isInStage: !!lastRow && Number(lastRow.in_play) === 1
+      }];
+    })
+  );
+}
+
+async function getCumulativeSummaryMap() {
+  const rows = await db.all(
+    'SELECT * FROM player_activity ORDER BY player_id ASC, timestamp ASC'
+  );
+
+  const grouped = new Map();
+  for (const row of rows) {
+    const key = Number(row.player_id);
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
+    }
+
+    grouped.get(key).push(row);
+  }
+
+  return Object.fromEntries(
+    Array.from(grouped.entries()).map(([playerId, playerRows]) => [String(playerId), summarizeActivityRows(playerRows)])
+  );
 }
 
 app.get('/api/game', async (req, res) => {
@@ -217,25 +247,26 @@ app.get('/api/players', async (req, res) => {
   const whereClause = includeArchived ? '' : 'WHERE archive = 0';
   const players = await db.all(`SELECT * FROM players ${whereClause} ORDER BY id ASC`);
 
-  const payload = await Promise.all(
-    players.map(async (player) => {
-      const summary = await getPlayerSummary(player.id, gameId);
-      const cumulativeSeconds = await getCumulativePlayerSeconds(player.id);
+  const gameSummaryMap = await getActivitySummaryMap(gameId);
+  const cumulativeMap = await getCumulativeSummaryMap();
 
-      return {
-        id: player.id,
-        firstName: player.first_name,
-        lastName: player.last_name,
-        archive: Number(player.archive) === 1,
-        fullName: `${player.first_name} ${player.last_name}`,
-        inStage: summary.isInStage,
-        totalSeconds: summary.totalSeconds,
-        cumulativeSeconds,
-        totalMinutes: summary.totalSeconds / 60,
-        cumulativeMinutes: cumulativeSeconds / 60
-      };
-    })
-  );
+  const payload = players.map((player) => {
+    const summary = gameSummaryMap[String(player.id)] || { totalSeconds: 0, isInStage: false };
+    const cumulativeSeconds = cumulativeMap[String(player.id)] || 0;
+
+    return {
+      id: player.id,
+      firstName: player.first_name,
+      lastName: player.last_name,
+      archive: Number(player.archive) === 1,
+      fullName: `${player.first_name} ${player.last_name}`,
+      inStage: summary.isInStage,
+      totalSeconds: summary.totalSeconds,
+      cumulativeSeconds,
+      totalMinutes: summary.totalSeconds / 60,
+      cumulativeMinutes: cumulativeSeconds / 60
+    };
+  });
 
   res.json(payload);
 });
@@ -309,22 +340,22 @@ app.get('/api/players/:gameId', async (req, res) => {
   const gameId = resolveGameId(req.params.gameId);
   const players = await db.all('SELECT * FROM players WHERE archive = 0 ORDER BY id ASC');
 
-  const payload = await Promise.all(
-    players.map(async (player) => {
-      const summary = await getPlayerSummary(player.id, gameId);
+  const gameSummaryMap = await getActivitySummaryMap(gameId);
 
-      return {
-        id: player.id,
-        firstName: player.first_name,
-        lastName: player.last_name,
-        archive: Number(player.archive) === 1,
-        fullName: `${player.first_name} ${player.last_name}`,
-        inStage: summary.isInStage,
-        totalSeconds: summary.totalSeconds,
-        totalMinutes: summary.totalSeconds / 60
-      };
-    })
-  );
+  const payload = players.map((player) => {
+    const summary = gameSummaryMap[String(player.id)] || { totalSeconds: 0, isInStage: false };
+
+    return {
+      id: player.id,
+      firstName: player.first_name,
+      lastName: player.last_name,
+      archive: Number(player.archive) === 1,
+      fullName: `${player.first_name} ${player.last_name}`,
+      inStage: summary.isInStage,
+      totalSeconds: summary.totalSeconds,
+      totalMinutes: summary.totalSeconds / 60
+    };
+  });
 
   res.json(payload);
 });
@@ -465,12 +496,28 @@ app.get('*', (req, res) => {
 async function startServer() {
   await db.initialize();
 
-  app.listen(PORT, () => {
-    console.log(`Soccer game tracker running at http://localhost:${PORT}`);
+  return new Promise((resolve) => {
+    const server = app.listen(PORT, () => {
+      console.log(`Soccer game tracker running at http://localhost:${PORT}`);
+      resolve(server);
+    });
   });
 }
 
-startServer().catch((error) => {
-  console.error('Failed to start server:', error);
-  process.exit(1);
-});
+if (require.main === module) {
+  startServer().catch((error) => {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  app,
+  resolveGameId,
+  summarizeActivityRows,
+  getPlayerSummary,
+  getCumulativePlayerSeconds,
+  getActivitySummaryMap,
+  getCumulativeSummaryMap,
+  startServer
+};
