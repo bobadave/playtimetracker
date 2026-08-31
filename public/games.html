@@ -44,19 +44,194 @@
               <th>Location</th>
               <th>Date</th>
               <th>Status</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody id="games-body"></tbody>
         </table>
+        <div class="game-history-footer">
+          <button id="unarchive-games-btn" type="button" class="secondary-btn hidden">Unarchive Archived Games</button>
+        </div>
       </main>
     </div>
 
     <script src="/styles.js"></script>
     <script>
+      let currentGames = [];
+      let editingGameId = null;
+
       function getCurrentTeamId() {
         const match = window.location.pathname.match(/^\/t(\d+)\/games$/);
         return match ? Number(match[1]) : 1;
       }
+
+      function escapeHtml(value = '') {
+        return String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/\"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function renderGameRow(game) {
+        const teamId = getCurrentTeamId();
+        const href = `/t${teamId}/games/${game.id}`;
+        const isActive = Number(game.is_active) === 1;
+
+        if (editingGameId === game.id) {
+          return `
+            <tr data-game-id="${game.id}">
+              <td>${game.id}</td>
+              <td><input type="text" class="edit-name" value="${escapeHtml(game.name || '')}" /></td>
+              <td><input type="text" class="edit-location" value="${escapeHtml(game.location || '')}" /></td>
+              <td><input type="date" class="edit-date" value="${escapeHtml(game.date || '')}" /></td>
+              <td>
+                <select class="edit-status">
+                  <option value="true" ${isActive ? 'selected' : ''}>Active</option>
+                  <option value="false" ${!isActive ? 'selected' : ''}>Ended</option>
+                </select>
+              </td>
+              <td class="row-actions">
+                <button type="button" class="secondary-btn small-btn" data-action="cancel" data-game-id="${game.id}">Cancel</button>
+                <button type="button" class="danger-btn small-btn" data-action="archive" data-game-id="${game.id}">Archive</button>
+                <button type="button" class="primary-btn small-btn" data-action="update" data-game-id="${game.id}">Update</button>
+              </td>
+            </tr>
+          `;
+        }
+
+        return `
+          <tr data-game-id="${game.id}">
+            <td><a href="${href}">${game.id}</a></td>
+            <td><a href="${href}">${escapeHtml(game.name || '')}</a></td>
+            <td>${escapeHtml(game.location || 'TBD')}</td>
+            <td>${escapeHtml(game.date || 'TBD')}</td>
+            <td>${isActive ? 'Active' : 'Ended'}</td>
+            <td class="row-actions">
+              <button type="button" class="secondary-btn small-btn" data-action="edit" data-game-id="${game.id}">Edit</button>
+            </td>
+          </tr>
+        `;
+      }
+
+      function renderGamesTable() {
+        const tbody = document.getElementById('games-body');
+        tbody.innerHTML = currentGames.map(renderGameRow).join('');
+      }
+
+      async function updateGame(gameId) {
+        const row = document.querySelector(`tr[data-game-id="${gameId}"]`);
+        const name = row.querySelector('.edit-name').value.trim();
+        const location = row.querySelector('.edit-location').value.trim();
+        const date = row.querySelector('.edit-date').value;
+        const isActive = row.querySelector('.edit-status').value === 'true';
+
+        if (!name || !location || !date) {
+          alert('Name, location, and date are required.');
+          return;
+        }
+
+        const response = await fetch(`/api/games/${gameId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ name, location, date, isActive })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          alert(errorData.message || 'Unable to update game.');
+          return;
+        }
+
+        editingGameId = null;
+        await loadGames();
+      }
+
+      async function archiveGame(gameId) {
+        if (!confirm('Archive this game? It will be hidden from the game history list.')) {
+          return;
+        }
+
+        const response = await fetch(`/api/games/${gameId}/archive`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ archived: true })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          alert(errorData.message || 'Unable to archive game.');
+          return;
+        }
+
+        editingGameId = null;
+        await loadGames();
+        await refreshUnarchiveButton();
+      }
+
+      async function refreshUnarchiveButton() {
+        const teamId = getCurrentTeamId();
+        const unarchiveBtn = document.getElementById('unarchive-games-btn');
+        if (!unarchiveBtn) {
+          return;
+        }
+
+        const response = await fetch(`/api/games?teamId=${teamId}&archived=true`);
+        if (!response.ok) {
+          unarchiveBtn.classList.add('hidden');
+          return;
+        }
+
+        const { games = [] } = await response.json();
+        unarchiveBtn.classList.toggle('hidden', games.length === 0);
+      }
+
+      async function unarchiveGames() {
+        const teamId = getCurrentTeamId();
+        const response = await fetch('/api/games/unarchive', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ teamId })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          alert(errorData.message || 'Unable to unarchive games.');
+          return;
+        }
+
+        await loadGames();
+        await refreshUnarchiveButton();
+      }
+
+      document.getElementById('games-body').addEventListener('click', (event) => {
+        const button = event.target.closest('button[data-action]');
+        if (!button) {
+          return;
+        }
+
+        const gameId = Number(button.dataset.gameId);
+        const { action } = button.dataset;
+
+        if (action === 'edit') {
+          editingGameId = gameId;
+          renderGamesTable();
+        } else if (action === 'cancel') {
+          editingGameId = null;
+          renderGamesTable();
+        } else if (action === 'update') {
+          updateGame(gameId);
+        } else if (action === 'archive') {
+          archiveGame(gameId);
+        }
+      });
 
       async function loadGames() {
         const teamId = getCurrentTeamId();
@@ -89,12 +264,13 @@
         }
 
         const { games } = await response.json();
-        const tbody = document.getElementById('games-body');
         const table = document.getElementById('games-table');
         const emptyState = document.getElementById('games-empty-state');
 
+        currentGames = games;
+
         if (games.length === 0) {
-          tbody.innerHTML = '';
+          document.getElementById('games-body').innerHTML = '';
           table.classList.add('hidden');
           emptyState.classList.remove('hidden');
           return;
@@ -102,24 +278,17 @@
 
         table.classList.remove('hidden');
         emptyState.classList.add('hidden');
-        tbody.innerHTML = games.map((game) => {
-          const href = `/t${teamId}/games/${game.id}`;
-          return `
-            <tr>
-              <td><a href="${href}">${game.id}</a></td>
-              <td><a href="${href}">${game.name}</a></td>
-              <td>${game.location || 'TBD'}</td>
-              <td>${game.date || 'TBD'}</td>
-              <td>${Number(game.is_active) === 1 ? 'Active' : 'Ended'}</td>
-            </tr>
-          `;
-        }).join('');
+        renderGamesTable();
       }
 
       document.addEventListener('DOMContentLoaded', () => {
         initMenu();
         updateTeamScopedMenuLinks();
+        document.getElementById('unarchive-games-btn').addEventListener('click', unarchiveGames);
         loadGames().catch((error) => {
+          console.error(error);
+        });
+        refreshUnarchiveButton().catch((error) => {
           console.error(error);
         });
       });

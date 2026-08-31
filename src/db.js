@@ -74,7 +74,8 @@ function createDbApi(databasePath = dbPath) {
         created_at TEXT NOT NULL,
         location TEXT,
         date TEXT,
-        is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))
+        is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+        archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))
       )
     `);
 
@@ -83,6 +84,33 @@ function createDbApi(databasePath = dbPath) {
         id INTEGER PRIMARY KEY,
         team_name TEXT NOT NULL,
         user_admin_id INTEGER
+      )
+    `);
+
+    await run(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY,
+        first_name TEXT NOT NULL,
+        last_name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        team_ids TEXT NOT NULL DEFAULT '[]',
+        email_verified INTEGER NOT NULL DEFAULT 0 CHECK (email_verified IN (0, 1)),
+        verification_token TEXT,
+        verified_at TEXT,
+        reset_token TEXT,
+        reset_expires_at TEXT,
+        created_at TEXT NOT NULL
+      )
+    `);
+
+    await run(`
+      CREATE TABLE IF NOT EXISTS user_team_memberships (
+        user_id INTEGER NOT NULL,
+        team_id INTEGER NOT NULL,
+        PRIMARY KEY (user_id, team_id),
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (team_id) REFERENCES teams(id)
       )
     `);
 
@@ -114,9 +142,22 @@ function createDbApi(databasePath = dbPath) {
     await ensureColumn('games', 'date', 'date TEXT');
     await ensureColumn('games', 'is_active', 'is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))');
     await ensureColumn('games', 'team_id', 'team_id INTEGER NOT NULL DEFAULT 1 REFERENCES teams(id)');
+    await ensureColumn('games', 'archived', 'archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))');
 
     await ensureColumn('teams', 'team_name', 'team_name TEXT NOT NULL');
     await ensureColumn('teams', 'user_admin_id', 'user_admin_id INTEGER');
+
+    await ensureColumn('users', 'first_name', 'first_name TEXT NOT NULL DEFAULT ""');
+    await ensureColumn('users', 'last_name', 'last_name TEXT NOT NULL DEFAULT ""');
+    await ensureColumn('users', 'email', 'email TEXT NOT NULL UNIQUE DEFAULT ""');
+    await ensureColumn('users', 'password_hash', 'password_hash TEXT NOT NULL DEFAULT ""');
+    await ensureColumn('users', 'team_ids', 'team_ids TEXT NOT NULL DEFAULT "[]"');
+    await ensureColumn('users', 'email_verified', 'email_verified INTEGER NOT NULL DEFAULT 0 CHECK (email_verified IN (0, 1))');
+    await ensureColumn('users', 'verification_token', 'verification_token TEXT');
+    await ensureColumn('users', 'verified_at', 'verified_at TEXT');
+    await ensureColumn('users', 'reset_token', 'reset_token TEXT');
+    await ensureColumn('users', 'reset_expires_at', 'reset_expires_at TEXT');
+    await ensureColumn('users', 'created_at', 'created_at TEXT NOT NULL DEFAULT (datetime("now"))');
 
     await ensureColumn('players', 'archive', 'archive INTEGER NOT NULL DEFAULT 0 CHECK (archive IN (0, 1))');
     await ensureColumn('players', 'team_id', 'team_id INTEGER NOT NULL DEFAULT 1 REFERENCES teams(id)');

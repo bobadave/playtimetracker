@@ -9,7 +9,9 @@
     "test": "node --test"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "express": "^4.19.2",
+    "express-session": "^1.19.0",
     "sqlite3": "^5.1.7"
   }
 }

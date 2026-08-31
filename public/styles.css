@@ -108,6 +108,17 @@ button, input {
   background: #f3f6fb;
 }
 
+.menu-panel a.disabled-link {
+  color: #8a98ae;
+  opacity: 0.6;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.menu-panel a.disabled-link:hover {
+  background: transparent;
+}
+
 .header-actions {
   display: flex;
   align-items: center;
@@ -230,6 +241,74 @@ button, input {
   padding: 24px;
 }
 
+.auth-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+}
+
+.auth-card {
+  width: min(440px, 100%);
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 28px 24px;
+}
+
+.auth-card h1 {
+  margin-bottom: 10px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.auth-form .field-group {
+  width: 100%;
+}
+
+.auth-form input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.auth-links {
+  margin-top: 16px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.auth-links a {
+  color: #123b66;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.auth-message {
+  margin-top: 14px;
+  min-height: 22px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.auth-message.error {
+  color: var(--red);
+}
+
+.auth-message.success {
+  color: var(--green-dark);
+}
+
 .content-panel {
   background: #ffffff;
   border: 1px solid var(--line);
@@ -256,6 +335,12 @@ button, input {
   margin: 0;
   max-width: 420px;
   line-height: 1.5;
+}
+
+.game-history-footer {
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
 }
 
 .roster-chart-card {
@@ -416,6 +501,51 @@ button, input {
   gap: 16px;
 }
 
+.view-toggle {
+  position: relative;
+  display: flex;
+  background: #eaf1fb;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px;
+  margin-bottom: 18px;
+}
+
+.view-toggle-option {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 10px 14px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 999px;
+  transition: color 0.2s ease;
+}
+
+.view-toggle-option.active {
+  color: #ffffff;
+}
+
+.view-toggle-slider {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: calc(50% - 4px);
+  height: calc(100% - 8px);
+  background: #123b66;
+  border-radius: 999px;
+  box-shadow: 0 6px 14px rgba(18, 59, 102, 0.25);
+  transition: transform 0.2s ease;
+}
+
+.view-toggle[data-active="join"] .view-toggle-slider {
+  transform: translateX(100%);
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -478,6 +608,31 @@ button, input {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 12px;
+}
+
+.sort-btn {
+  border: none;
+  background: transparent;
+  padding: 2px 4px;
+  margin-left: 4px;
+  cursor: pointer;
+  border-radius: 6px;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.sort-btn:hover {
+  background: rgba(18, 32, 51, 0.08);
+}
+
+.sort-arrow {
+  font-size: 11px;
+  color: #a3b1c6;
+}
+
+.sort-arrow.active {
+  color: var(--ink);
+  font-weight: 700;
 }
 
 .eyebrow {

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Teams</title>
+    <title>My Teams</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -23,10 +23,10 @@
         </div>
         <div>
           <p class="eyebrow">Teams</p>
-          <h1>Teams</h1>
+          <h1>My Teams</h1>
         </div>
         <div class="header-actions roster-actions">
-          <button id="new-team-btn" class="primary-btn" type="button">Create New Team</button>
+          <button id="new-team-btn" class="primary-btn" type="button">Add New Team</button>
         </div>
       </header>
 
@@ -37,6 +37,7 @@
               <th>Team Name</th>
               <th>Players</th>
               <th>Games</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody id="teams-body"></tbody>
@@ -48,9 +49,16 @@
       <div class="modal-backdrop" data-close-modal="true"></div>
       <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="team-modal-title">
         <div class="modal-header">
-          <h2 id="team-modal-title">Create New Team</h2>
+          <h2 id="team-modal-title">Add New Team</h2>
           <button id="close-team-modal" class="icon-btn" type="button" aria-label="Close team dialog">×</button>
         </div>
+
+        <div id="team-view-toggle" class="view-toggle" data-active="create">
+          <button type="button" id="toggle-create-view" class="view-toggle-option active">Create Team</button>
+          <button type="button" id="toggle-join-view" class="view-toggle-option">Join Team</button>
+          <div class="view-toggle-slider"></div>
+        </div>
+
         <form id="team-form" class="player-form">
           <div class="field-group">
             <label for="team-name">Team Name</label>
@@ -61,11 +69,43 @@
             <button type="submit" class="primary-btn">Save Team</button>
           </div>
         </form>
+
+        <form id="join-team-form" class="player-form hidden">
+          <div class="field-group">
+            <label for="join-team-select">Select a Team</label>
+            <select id="join-team-select" name="teamId" required></select>
+          </div>
+          <div class="modal-actions">
+            <button type="button" id="cancel-join-team-btn" class="secondary-btn">Cancel</button>
+            <button type="submit" class="primary-btn">Join Team</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="remove-team-modal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-modal="true"></div>
+      <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="remove-team-modal-title">
+        <div class="modal-header">
+          <h2 id="remove-team-modal-title">Remove Team</h2>
+          <button id="close-remove-team-modal" class="icon-btn" type="button" aria-label="Close remove team dialog">×</button>
+        </div>
+        <p>Are you sure? Removing a team will only remove your ownership of the team. The team will continue to exist and you may add the team back.</p>
+        <div class="modal-actions">
+          <button type="button" id="cancel-remove-team-btn" class="secondary-btn">Cancel</button>
+          <button type="button" id="confirm-remove-team-btn" class="danger-btn">Remove Team</button>
+        </div>
       </div>
     </div>
 
     <script src="/styles.js"></script>
     <script>
+      const teamsState = {
+        teams: [],
+        editingTeamId: null,
+        pendingRemoveTeamId: null
+      };
+
       function escapeHtml(value = '') {
         return String(value)
           .replace(/&/g, '&amp;')
@@ -75,19 +115,61 @@
           .replace(/'/g, '&#39;');
       }
 
+      function setTeamModalView(view) {
+        const toggle = document.getElementById('team-view-toggle');
+        const createBtn = document.getElementById('toggle-create-view');
+        const joinBtn = document.getElementById('toggle-join-view');
+        const createForm = document.getElementById('team-form');
+        const joinForm = document.getElementById('join-team-form');
+
+        toggle.dataset.active = view;
+        createBtn.classList.toggle('active', view === 'create');
+        joinBtn.classList.toggle('active', view === 'join');
+        createForm.classList.toggle('hidden', view !== 'create');
+        joinForm.classList.toggle('hidden', view !== 'join');
+
+        if (view === 'create') {
+          document.getElementById('team-name').focus();
+        } else {
+          loadJoinableTeams();
+          document.getElementById('join-team-select').focus();
+        }
+      }
+
+      async function loadJoinableTeams() {
+        const select = document.getElementById('join-team-select');
+        select.innerHTML = '<option value="">Loading teams…</option>';
+
+        const response = await fetch('/api/teams/directory');
+        if (!response.ok) {
+          select.innerHTML = '<option value="">Unable to load teams</option>';
+          return;
+        }
+
+        const { teams = [] } = await response.json();
+        if (!teams.length) {
+          select.innerHTML = '<option value="">No teams available to join</option>';
+          return;
+        }
+
+        select.innerHTML = teams
+          .map((team) => `<option value="${team.id}">${escapeHtml(team.teamName)}</option>`)
+          .join('');
+      }
+
       function openTeamModal() {
         const modal = document.getElementById('team-modal');
         modal.classList.remove('hidden');
         modal.setAttribute('aria-hidden', 'false');
-        document.getElementById('team-name').focus();
+        setTeamModalView('create');
       }
 
       function closeTeamModal() {
         const modal = document.getElementById('team-modal');
         modal.classList.add('hidden');
         modal.setAttribute('aria-hidden', 'true');
-        const form = document.getElementById('team-form');
-        form.reset();
+        document.getElementById('team-form').reset();
+        document.getElementById('join-team-form').reset();
       }
 
       async function createTeam(event) {
@@ -119,6 +201,71 @@
         await loadTeams();
       }
 
+      async function joinTeam(event) {
+        event.preventDefault();
+
+        const formData = new FormData(event.currentTarget);
+        const teamId = String(formData.get('teamId') || '').trim();
+
+        if (!teamId) {
+          alert('Please select a team to join.');
+          return;
+        }
+
+        const response = await fetch('/api/teams/join', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ teamId })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          alert(errorData.message || 'Unable to join team.');
+          return;
+        }
+
+        closeTeamModal();
+        await loadTeams();
+      }
+
+      function renderTeamRow(team) {
+        const editing = Number(teamsState.editingTeamId) === Number(team.id);
+
+        if (editing) {
+          return `
+            <tr data-team-id="${team.id}">
+              <td><input type="text" class="inline-input edit-team-name" value="${escapeHtml(team.teamName)}" /></td>
+              <td>${team.playerCount} on roster</td>
+              <td>${team.gameCount} games</td>
+              <td class="row-actions">
+                <button type="button" class="secondary-btn small-btn" data-action="cancel" data-team-id="${team.id}">Cancel</button>
+                <button type="button" class="danger-btn small-btn" data-action="remove" data-team-id="${team.id}">Remove Team</button>
+                <button type="button" class="primary-btn small-btn" data-action="update" data-team-id="${team.id}">Update</button>
+              </td>
+            </tr>
+          `;
+        }
+
+        return `
+          <tr data-team-id="${team.id}">
+            <td><a href="/t${team.id}/games">${escapeHtml(team.teamName)}</a></td>
+            <td><a href="/t${team.id}/roster" class="secondary-btn small-btn">${team.playerCount} on roster</a></td>
+            <td><a href="/t${team.id}/games" class="secondary-btn small-btn">${team.gameCount} games</a></td>
+            <td class="row-actions">
+              <button type="button" class="secondary-btn small-btn" data-action="edit" data-team-id="${team.id}">Edit</button>
+            </td>
+          </tr>
+        `;
+      }
+
+      function renderTeamsTable() {
+        const tableBody = document.getElementById('teams-body');
+        const sortedTeams = [...teamsState.teams].sort((a, b) => String(a.teamName || '').localeCompare(String(b.teamName || '')));
+        tableBody.innerHTML = sortedTeams.map(renderTeamRow).join('');
+      }
+
       async function loadTeams() {
         const response = await fetch('/api/teams');
         if (!response.ok) {
@@ -126,16 +273,92 @@
         }
 
         const { teams = [] } = await response.json();
-        const tableBody = document.getElementById('teams-body');
-        const sortedTeams = [...teams].sort((a, b) => String(a.teamName || '').localeCompare(String(b.teamName || '')));
+        teamsState.teams = teams;
+        renderTeamsTable();
+      }
 
-        tableBody.innerHTML = sortedTeams.map((team) => `
-          <tr>
-            <td><a href="/t${team.id}/games">${escapeHtml(team.teamName)}</a></td>
-            <td><a href="/t${team.id}/roster" class="secondary-btn small-btn">${team.playerCount} on roster</a></td>
-            <td><a href="/t${team.id}/games" class="secondary-btn small-btn">${team.gameCount} games</a></td>
-          </tr>
-        `).join('');
+      async function updateTeam(teamId) {
+        const row = document.querySelector(`tr[data-team-id="${teamId}"]`);
+        const teamName = row.querySelector('.edit-team-name').value.trim();
+
+        if (!teamName) {
+          alert('Please enter a team name.');
+          return;
+        }
+
+        const response = await fetch(`/api/teams/${teamId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ teamName })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          alert(errorData.message || 'Unable to update team.');
+          return;
+        }
+
+        teamsState.editingTeamId = null;
+        await loadTeams();
+      }
+
+      function openRemoveTeamModal(teamId) {
+        teamsState.pendingRemoveTeamId = teamId;
+        const modal = document.getElementById('remove-team-modal');
+        modal.classList.remove('hidden');
+        modal.setAttribute('aria-hidden', 'false');
+      }
+
+      function closeRemoveTeamModal() {
+        teamsState.pendingRemoveTeamId = null;
+        const modal = document.getElementById('remove-team-modal');
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+      }
+
+      async function confirmRemoveTeam() {
+        const teamId = teamsState.pendingRemoveTeamId;
+        if (!teamId) {
+          return;
+        }
+
+        const response = await fetch(`/api/teams/${teamId}/membership`, {
+          method: 'DELETE'
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          alert(errorData.message || 'Unable to remove team.');
+          return;
+        }
+
+        closeRemoveTeamModal();
+        teamsState.editingTeamId = null;
+        await loadTeams();
+      }
+
+      function handleTeamsTableClick(event) {
+        const button = event.target.closest('button[data-action]');
+        if (!button) {
+          return;
+        }
+
+        const teamId = Number(button.dataset.teamId);
+        const { action } = button.dataset;
+
+        if (action === 'edit') {
+          teamsState.editingTeamId = teamId;
+          renderTeamsTable();
+        } else if (action === 'cancel') {
+          teamsState.editingTeamId = null;
+          renderTeamsTable();
+        } else if (action === 'update') {
+          updateTeam(teamId);
+        } else if (action === 'remove') {
+          openRemoveTeamModal(teamId);
+        }
       }
 
       document.addEventListener('DOMContentLoaded', () => {
@@ -145,10 +368,24 @@
         document.getElementById('new-team-btn').addEventListener('click', openTeamModal);
         document.getElementById('close-team-modal').addEventListener('click', closeTeamModal);
         document.getElementById('cancel-team-btn').addEventListener('click', closeTeamModal);
+        document.getElementById('cancel-join-team-btn').addEventListener('click', closeTeamModal);
         document.getElementById('team-form').addEventListener('submit', createTeam);
+        document.getElementById('join-team-form').addEventListener('submit', joinTeam);
+        document.getElementById('toggle-create-view').addEventListener('click', () => setTeamModalView('create'));
+        document.getElementById('toggle-join-view').addEventListener('click', () => setTeamModalView('join'));
         document.getElementById('team-modal').addEventListener('click', (event) => {
           if (event.target.dataset.closeModal === 'true') {
             closeTeamModal();
+          }
+        });
+
+        document.getElementById('teams-body').addEventListener('click', handleTeamsTableClick);
+        document.getElementById('close-remove-team-modal').addEventListener('click', closeRemoveTeamModal);
+        document.getElementById('cancel-remove-team-btn').addEventListener('click', closeRemoveTeamModal);
+        document.getElementById('confirm-remove-team-btn').addEventListener('click', confirmRemoveTeam);
+        document.getElementById('remove-team-modal').addEventListener('click', (event) => {
+          if (event.target.dataset.closeModal === 'true') {
+            closeRemoveTeamModal();
           }
         });
 

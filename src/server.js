@@ -1,4 +1,7 @@
+const crypto = require('crypto');
 const express = require('express');
+const session = require('express-session');
+const bcrypt = require('bcryptjs');
 const path = require('path');
 const db = require('./db');
 
@@ -8,6 +11,130 @@ const DEFAULT_GAME_ID = 1;
 const DEFAULT_TEAM_ID = 1;
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'soccer-tracker-demo-secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: false
+  }
+}));
+
+function getSessionUserId(req) {
+  const userId = Number(req.session?.userId);
+  return Number.isFinite(userId) && userId > 0 ? userId : null;
+}
+
+function parseUserTeamIds(value) {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map((teamId) => Number(teamId)).filter((teamId) => Number.isFinite(teamId) && teamId > 0) : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+async function syncUserTeamMembership(userId, teamId) {
+  if (!userId || !teamId) {
+    return;
+  }
+
+  await db.run(
+    'INSERT OR IGNORE INTO user_team_memberships (user_id, team_id) VALUES (?, ?)',
+    [userId, teamId]
+  );
+
+  const rows = await db.all(
+    'SELECT team_id FROM user_team_memberships WHERE user_id = ? ORDER BY team_id ASC',
+    [userId]
+  );
+
+  const teamIds = rows.map((row) => Number(row.team_id));
+  await db.run('UPDATE users SET team_ids = ? WHERE id = ?', [JSON.stringify(teamIds), userId]);
+}
+
+async function removeUserTeamMembership(userId, teamId) {
+  await db.run(
+    'DELETE FROM user_team_memberships WHERE user_id = ? AND team_id = ?',
+    [userId, teamId]
+  );
+
+  const rows = await db.all(
+    'SELECT team_id FROM user_team_memberships WHERE user_id = ? ORDER BY team_id ASC',
+    [userId]
+  );
+
+  const teamIds = rows.map((row) => Number(row.team_id));
+  await db.run('UPDATE users SET team_ids = ? WHERE id = ?', [JSON.stringify(teamIds), userId]);
+}
+
+async function getCurrentUserTeamIds(userId) {
+  if (!userId) {
+    return [];
+  }
+
+  const user = await db.get('SELECT team_ids FROM users WHERE id = ?', [userId]);
+  return parseUserTeamIds(user?.team_ids || '[]');
+}
+
+function generateVerificationToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function generateResetToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+async function sendVerificationEmail(user) {
+  const token = generateVerificationToken();
+  await db.run('UPDATE users SET verification_token = ? WHERE id = ?', [token, user.id]);
+
+  const verificationUrl = `http://localhost:${PORT}/verify-email?token=${encodeURIComponent(token)}`;
+  console.log(`[Email Verification] Sent to ${user.email}`);
+  console.log(`[Email Verification] Verify here: ${verificationUrl}`);
+
+  return verificationUrl;
+}
+
+async function sendPasswordResetEmail(user) {
+  const token = generateResetToken();
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  await db.run(
+    'UPDATE users SET reset_token = ?, reset_expires_at = ? WHERE id = ?',
+    [token, expiresAt, user.id]
+  );
+
+  const resetUrl = `http://localhost:${PORT}/reset-password?token=${encodeURIComponent(token)}`;
+  console.log(`[Password Reset] Sent to ${user.email}`);
+  console.log(`[Password Reset] Reset here: ${resetUrl}`);
+
+  return resetUrl;
+}
+
+async function userHasTeamAccess(userId, teamId) {
+  const currentTeamId = Number(teamId);
+  if (!userId || !Number.isFinite(currentTeamId) || currentTeamId <= 0) {
+    return false;
+  }
+
+  const teamIds = await getCurrentUserTeamIds(userId);
+  return teamIds.includes(currentTeamId);
+}
+
+function requireAuth(req, res, next) {
+  if (!getSessionUserId(req)) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
+  return next();
+}
 
 function resolveGameId(gameId) {
   const parsed = Number(gameId ?? DEFAULT_GAME_ID);
@@ -61,7 +188,12 @@ async function getPlayerSummary(playerId, gameId) {
 
 async function getCumulativePlayerSeconds(playerId) {
   const rows = await db.all(
-    'SELECT * FROM player_activity WHERE player_id = ? ORDER BY timestamp ASC',
+    `
+      SELECT pa.* FROM player_activity pa
+      INNER JOIN games g ON g.id = pa.game_id
+      WHERE pa.player_id = ? AND g.archived = 0
+      ORDER BY pa.timestamp ASC
+    `,
     [playerId]
   );
 
@@ -97,9 +229,12 @@ async function getActivitySummaryMap(gameId) {
 }
 
 async function getCumulativeSummaryMap() {
-  const rows = await db.all(
-    'SELECT * FROM player_activity ORDER BY player_id ASC, timestamp ASC'
-  );
+  const rows = await db.all(`
+    SELECT pa.* FROM player_activity pa
+    INNER JOIN games g ON g.id = pa.game_id
+    WHERE g.archived = 0
+    ORDER BY pa.player_id ASC, pa.timestamp ASC
+  `);
 
   const grouped = new Map();
   for (const row of rows) {
@@ -138,28 +273,39 @@ app.get('/api/game/:gameId', async (req, res) => {
 });
 
 app.get('/api/games', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
   const teamIdParam = req.query.teamId;
   const teamId = teamIdParam === undefined ? null : resolveTeamId(teamIdParam);
 
+  if (teamId !== null && !(await userHasTeamAccess(currentUserId, teamId))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
+  const archivedOnly = req.query.archived === 'true';
+  const conditions = [`g.archived = ${archivedOnly ? 1 : 0}`];
+  const params = [];
+
+  if (teamId !== null) {
+    conditions.push('g.team_id = ?');
+    params.push(teamId);
+  }
+
   const games = await db.all(
-    teamId === null
-      ? `
-          SELECT g.*, t.team_name AS team_name
-          FROM games g
-          LEFT JOIN teams t ON t.id = g.team_id
-          ORDER BY g.id ASC
-        `
-      : `
-          SELECT g.*, t.team_name AS team_name
-          FROM games g
-          LEFT JOIN teams t ON t.id = g.team_id
-          WHERE g.team_id = ?
-          ORDER BY g.id ASC
-        `,
-    teamId === null ? [] : [teamId]
+    `
+      SELECT g.*, t.team_name AS team_name
+      FROM games g
+      LEFT JOIN teams t ON t.id = g.team_id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY g.id ASC
+    `,
+    params
   );
 
-  res.json({ games });
+  return res.json({ games });
 });
 
 app.post('/api/games', async (req, res) => {
@@ -283,6 +429,128 @@ app.put('/api/game/:gameId/status', async (req, res) => {
   return res.json({ game: updatedGame });
 });
 
+app.put('/api/games/unarchive', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
+  const teamId = resolveTeamId(req.body?.teamId ?? DEFAULT_TEAM_ID);
+  if (!(await userHasTeamAccess(currentUserId, teamId))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
+  const result = await db.run(
+    'UPDATE games SET archived = 0 WHERE team_id = ? AND archived = 1',
+    [teamId]
+  );
+
+  return res.json({ updated: result.changes });
+});
+
+app.put('/api/games/:gameId', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
+  const gameId = resolveGameId(req.params.gameId);
+  const game = await db.get('SELECT * FROM games WHERE id = ?', [gameId]);
+  if (!game) {
+    return res.status(404).json({ message: 'Game not found.' });
+  }
+
+  if (!(await userHasTeamAccess(currentUserId, game.team_id))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
+  const { name, location, date, isActive } = req.body || {};
+
+  const trimmedName = String(name ?? '').trim();
+  const trimmedLocation = String(location ?? '').trim();
+  const normalizedDate = String(date ?? '').trim();
+
+  if (!trimmedName || !trimmedLocation || !normalizedDate) {
+    return res.status(400).json({ message: 'Name, location, and date are required.' });
+  }
+
+  const dateValue = new Date(`${normalizedDate}T00:00:00`);
+  if (Number.isNaN(dateValue.getTime())) {
+    return res.status(400).json({ message: 'The selected date is invalid.' });
+  }
+
+  if (typeof isActive !== 'boolean') {
+    return res.status(400).json({ message: 'isActive is required.' });
+  }
+
+  if (!isActive) {
+    const activePlayers = await db.all(
+      'SELECT DISTINCT player_id FROM player_activity WHERE game_id = ? AND in_play = 1',
+      [gameId]
+    );
+
+    for (const { player_id } of activePlayers) {
+      const lastActivity = await db.get(
+        'SELECT * FROM player_activity WHERE game_id = ? AND player_id = ? ORDER BY id DESC LIMIT 1',
+        [gameId, player_id]
+      );
+
+      if (lastActivity && Number(lastActivity.in_play) === 1) {
+        await db.run(
+          'INSERT INTO player_activity (game_id, player_id, in_play, timestamp) VALUES (?, ?, ?, ?)',
+          [gameId, player_id, 0, new Date().toISOString()]
+        );
+      }
+    }
+  }
+
+  await db.run(
+    'UPDATE games SET name = ?, location = ?, date = ?, is_active = ? WHERE id = ?',
+    [trimmedName, trimmedLocation, normalizedDate, isActive ? 1 : 0, gameId]
+  );
+
+  const updatedGame = await db.get(`
+    SELECT g.*, t.team_name AS team_name
+    FROM games g
+    LEFT JOIN teams t ON t.id = g.team_id
+    WHERE g.id = ?
+  `, [gameId]);
+
+  return res.json({ game: updatedGame });
+});
+
+app.put('/api/games/:gameId/archive', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
+  const gameId = resolveGameId(req.params.gameId);
+  const game = await db.get('SELECT * FROM games WHERE id = ?', [gameId]);
+  if (!game) {
+    return res.status(404).json({ message: 'Game not found.' });
+  }
+
+  if (!(await userHasTeamAccess(currentUserId, game.team_id))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
+  const { archived } = req.body || {};
+  if (typeof archived !== 'boolean') {
+    return res.status(400).json({ message: 'archived is required.' });
+  }
+
+  await db.run('UPDATE games SET archived = ? WHERE id = ?', [archived ? 1 : 0, gameId]);
+  const updatedGame = await db.get(`
+    SELECT g.*, t.team_name AS team_name
+    FROM games g
+    LEFT JOIN teams t ON t.id = g.team_id
+    WHERE g.id = ?
+  `, [gameId]);
+
+  return res.json({ game: updatedGame });
+});
+
 app.get('/api/players', async (req, res) => {
   const gameId = DEFAULT_GAME_ID;
   const includeArchived = req.query.includeArchived === 'true';
@@ -385,8 +653,17 @@ app.put('/api/players/:id', async (req, res) => {
 });
 
 app.get('/api/players/:gameId', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
   const gameId = resolveGameId(req.params.gameId);
   const teamId = resolveTeamId(req.query.teamId ?? DEFAULT_TEAM_ID);
+  if (!(await userHasTeamAccess(currentUserId, teamId))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
   const players = await db.all('SELECT * FROM players WHERE team_id = ? AND archive = 0 ORDER BY id ASC', [teamId]);
 
   const gameSummaryMap = await getActivitySummaryMap(gameId);
@@ -410,14 +687,26 @@ app.get('/api/players/:gameId', async (req, res) => {
 });
 
 app.get('/api/teams', async (req, res) => {
-  const teams = await db.all('SELECT * FROM teams ORDER BY team_name COLLATE NOCASE ASC');
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
+  const teamIds = await getCurrentUserTeamIds(currentUserId);
+
+  if (!teamIds.length) {
+    return res.json({ teams: [] });
+  }
+
+  const placeholders = teamIds.map(() => '?').join(', ');
+  const teams = await db.all(`SELECT * FROM teams WHERE id IN (${placeholders}) ORDER BY team_name COLLATE NOCASE ASC`, teamIds);
   const gameCounts = await db.all('SELECT team_id, COUNT(*) AS game_count FROM games GROUP BY team_id');
   const playerCounts = await db.all('SELECT team_id, COUNT(*) AS player_count FROM players GROUP BY team_id');
 
   const gameMap = new Map(gameCounts.map((row) => [Number(row.team_id), Number(row.game_count)]));
   const playerMap = new Map(playerCounts.map((row) => [Number(row.team_id), Number(row.player_count)]));
 
-  res.json({
+  return res.json({
     teams: teams.map((team) => ({
       id: team.id,
       teamName: team.team_name,
@@ -428,6 +717,11 @@ app.get('/api/teams', async (req, res) => {
 });
 
 app.post('/api/teams', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
   const { teamName } = req.body || {};
   const trimmedName = String(teamName ?? '').trim();
 
@@ -440,8 +734,52 @@ app.post('/api/teams', async (req, res) => {
     return res.status(409).json({ message: 'A team with that name already exists.' });
   }
 
-  const result = await db.run('INSERT INTO teams (team_name, user_admin_id) VALUES (?, ?)', [trimmedName, null]);
+  const result = await db.run('INSERT INTO teams (team_name, user_admin_id) VALUES (?, ?)', [trimmedName, currentUserId]);
+  await syncUserTeamMembership(currentUserId, result.id);
   const team = await db.get('SELECT * FROM teams WHERE id = ?', [result.id]);
+
+  return res.status(201).json({ team });
+});
+
+app.get('/api/teams/directory', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
+  const memberTeamIds = await getCurrentUserTeamIds(currentUserId);
+  const teams = await db.all('SELECT * FROM teams ORDER BY team_name COLLATE NOCASE ASC');
+  const joinableTeams = teams.filter((team) => !memberTeamIds.includes(Number(team.id)));
+
+  return res.json({
+    teams: joinableTeams.map((team) => ({
+      id: team.id,
+      teamName: team.team_name
+    }))
+  });
+});
+
+app.post('/api/teams/join', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
+  const teamId = Number(req.body?.teamId);
+  if (!Number.isFinite(teamId) || teamId <= 0) {
+    return res.status(400).json({ message: 'A team must be selected.' });
+  }
+
+  const team = await db.get('SELECT * FROM teams WHERE id = ?', [teamId]);
+  if (!team) {
+    return res.status(404).json({ message: 'Team not found.' });
+  }
+
+  if (await userHasTeamAccess(currentUserId, teamId)) {
+    return res.status(409).json({ message: 'You are already a member of that team.' });
+  }
+
+  await syncUserTeamMembership(currentUserId, teamId);
 
   return res.status(201).json({ team });
 });
@@ -455,6 +793,50 @@ app.get('/api/teams/:teamId', async (req, res) => {
   }
 
   return res.json({ team });
+});
+
+app.put('/api/teams/:teamId', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
+  const teamId = resolveTeamId(req.params.teamId);
+  if (!(await userHasTeamAccess(currentUserId, teamId))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
+  const { teamName } = req.body || {};
+  const trimmedName = String(teamName ?? '').trim();
+  if (!trimmedName) {
+    return res.status(400).json({ message: 'Team name is required.' });
+  }
+
+  const existing = await db.get('SELECT id FROM teams WHERE team_name = ? AND id != ?', [trimmedName, teamId]);
+  if (existing) {
+    return res.status(409).json({ message: 'A team with that name already exists.' });
+  }
+
+  await db.run('UPDATE teams SET team_name = ? WHERE id = ?', [trimmedName, teamId]);
+  const team = await db.get('SELECT * FROM teams WHERE id = ?', [teamId]);
+
+  return res.json({ team });
+});
+
+app.delete('/api/teams/:teamId/membership', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
+  const teamId = resolveTeamId(req.params.teamId);
+  if (!(await userHasTeamAccess(currentUserId, teamId))) {
+    return res.status(404).json({ message: 'That team is not in your teams list.' });
+  }
+
+  await removeUserTeamMembership(currentUserId, teamId);
+
+  return res.json({ success: true });
 });
 
 app.get('/api/stage', async (req, res) => {
@@ -564,46 +946,318 @@ app.post('/api/segments', async (req, res) => {
   return res.status(201).json({ segment, summary });
 });
 
+app.get('/api/session', async (req, res) => {
+  const userId = getSessionUserId(req);
+  if (!userId) {
+    return res.json({ user: null });
+  }
+
+  const user = await db.get('SELECT id, first_name, last_name, email, team_ids, email_verified FROM users WHERE id = ?', [userId]);
+  if (!user) {
+    req.session.destroy(() => undefined);
+    return res.json({ user: null });
+  }
+
+  return res.json({
+    user: {
+      id: user.id,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      email: user.email,
+      emailVerified: Number(user.email_verified) === 1,
+      teamIds: parseUserTeamIds(user.team_ids)
+    }
+  });
+});
+
+app.get('/verify-email', async (req, res) => {
+  const token = String(req.query.token ?? '').trim();
+  if (!token) {
+    return res.status(400).send('<html><body><h1>Verification Error</h1><p>Missing verification token.</p><p><a href="/login">Return to login</a></p></body></html>');
+  }
+
+  const user = await db.get('SELECT * FROM users WHERE verification_token = ?', [token]);
+  if (!user) {
+    return res.status(400).send('<html><body><h1>Verification Failed</h1><p>This verification link is invalid or has already been used.</p><p><a href="/login">Return to login</a></p></body></html>');
+  }
+
+  if (Number(user.email_verified) === 1) {
+    return res.send('<html><body><h1>Email Already Verified</h1><p>Your email has already been verified.</p><p><a href="/login">Go to login</a></p></body></html>');
+  }
+
+  await db.run(
+    'UPDATE users SET email_verified = 1, verification_token = NULL, verified_at = ? WHERE id = ?',
+    [new Date().toISOString(), user.id]
+  );
+
+  return res.send('<html><body><h1>Email Verified</h1><p>Your account has been verified. You can now log in.</p><p><a href="/login">Go to login</a></p></body></html>');
+});
+
+app.post('/api/password-reset/request', async (req, res) => {
+  const email = String(req.body?.email ?? '').trim().toLowerCase();
+  if (!email) {
+    return res.status(400).json({ message: 'Email is required.' });
+  }
+
+  const user = await db.get('SELECT * FROM users WHERE email = ?', [email]);
+  if (!user) {
+    return res.status(404).json({ message: 'No account was found with that email address.' });
+  }
+
+  await sendPasswordResetEmail(user);
+
+  return res.json({
+    message: 'If an account exists for that email, a password reset link has been sent.'
+  });
+});
+
+app.post('/api/password-reset/confirm', async (req, res) => {
+  const { token, password } = req.body || {};
+  const resetToken = String(token ?? '').trim();
+  const trimmedPassword = String(password ?? '');
+
+  if (!resetToken || trimmedPassword.length < 6) {
+    return res.status(400).json({ message: 'A valid reset token and a password with at least 6 characters are required.' });
+  }
+
+  const user = await db.get(
+    'SELECT * FROM users WHERE reset_token = ? AND reset_expires_at IS NOT NULL',
+    [resetToken]
+  );
+
+  if (!user) {
+    return res.status(400).json({ message: 'This password reset link is invalid or has expired.' });
+  }
+
+  const expiresAt = new Date(user.reset_expires_at).getTime();
+  if (Number.isNaN(expiresAt) || expiresAt < Date.now()) {
+    await db.run('UPDATE users SET reset_token = NULL, reset_expires_at = NULL WHERE id = ?', [user.id]);
+    return res.status(400).json({ message: 'This password reset link has expired. Please request a new one.' });
+  }
+
+  const passwordHash = await bcrypt.hash(trimmedPassword, 10);
+  await db.run(
+    'UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires_at = NULL WHERE id = ?',
+    [passwordHash, user.id]
+  );
+
+  return res.json({ message: 'Your password has been updated successfully.' });
+});
+
+app.post('/api/register', async (req, res) => {
+  const { firstName, lastName, email, password } = req.body || {};
+  const trimmedFirst = String(firstName ?? '').trim();
+  const trimmedLast = String(lastName ?? '').trim();
+  const normalizedEmail = String(email ?? '').trim().toLowerCase();
+  const trimmedPassword = String(password ?? '');
+
+  if (!trimmedFirst || !trimmedLast || !normalizedEmail || trimmedPassword.length < 6) {
+    return res.status(400).json({ message: 'First name, last name, email, and a password with at least 6 characters are required.' });
+  }
+
+  const existingUser = await db.get('SELECT id FROM users WHERE email = ?', [normalizedEmail]);
+  if (existingUser) {
+    return res.status(409).json({ message: 'An account with that email already exists.' });
+  }
+
+  const passwordHash = await bcrypt.hash(trimmedPassword, 10);
+  const result = await db.run(
+    'INSERT INTO users (first_name, last_name, email, password_hash, team_ids, email_verified, verification_token, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [trimmedFirst, trimmedLast, normalizedEmail, passwordHash, JSON.stringify([]), 0, null, new Date().toISOString()]
+  );
+
+  const user = await db.get('SELECT id, first_name, last_name, email, team_ids, email_verified FROM users WHERE id = ?', [result.id]);
+  const verificationUrl = await sendVerificationEmail(user);
+
+  return res.status(201).json({
+    message: 'Registration successful. Check your email to verify your account before logging in.',
+    verificationUrl,
+    user: {
+      id: user.id,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      email: user.email,
+      emailVerified: Number(user.email_verified) === 1,
+      teamIds: parseUserTeamIds(user.team_ids)
+    }
+  });
+});
+
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body || {};
+  const normalizedEmail = String(email ?? '').trim().toLowerCase();
+  const trimmedPassword = String(password ?? '');
+
+  if (!normalizedEmail || !trimmedPassword) {
+    return res.status(400).json({ message: 'Email and password are required.' });
+  }
+
+  const user = await db.get('SELECT * FROM users WHERE email = ?', [normalizedEmail]);
+  if (!user) {
+    return res.status(401).json({ message: 'Invalid email or password.' });
+  }
+
+  const passwordMatches = await bcrypt.compare(trimmedPassword, user.password_hash);
+  if (!passwordMatches) {
+    return res.status(401).json({ message: 'Invalid email or password.' });
+  }
+
+  if (Number(user.email_verified) !== 1) {
+    return res.status(403).json({ message: 'Please verify your email before logging in. Check your inbox for a verification link.' });
+  }
+
+  req.session.userId = user.id;
+
+  return res.json({
+    user: {
+      id: user.id,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      email: user.email,
+      emailVerified: true,
+      teamIds: parseUserTeamIds(user.team_ids)
+    }
+  });
+});
+
+app.post('/api/logout', (req, res) => {
+  req.session.destroy((error) => {
+    if (error) {
+      return res.status(500).json({ message: 'Unable to log out.' });
+    }
+
+    return res.json({ success: true });
+  });
+});
+
 app.get('/', (req, res) => {
-  res.redirect('/teams');
+  res.redirect(req.session?.userId ? '/teams' : '/login');
+});
+
+app.get('/login', (req, res) => {
+  if (req.session?.userId) {
+    return res.redirect('/teams');
+  }
+
+  return res.sendFile(path.join(__dirname, '..', 'public', 'login.html'));
+});
+
+app.get('/register', (req, res) => {
+  if (req.session?.userId) {
+    return res.redirect('/teams');
+  }
+
+  return res.sendFile(path.join(__dirname, '..', 'public', 'register.html'));
+});
+
+app.get('/forgot-password', (req, res) => {
+  if (req.session?.userId) {
+    return res.redirect('/teams');
+  }
+
+  return res.sendFile(path.join(__dirname, '..', 'public', 'forgot-password.html'));
+});
+
+app.get('/reset-password', (req, res) => {
+  if (req.session?.userId) {
+    return res.redirect('/teams');
+  }
+
+  return res.sendFile(path.join(__dirname, '..', 'public', 'reset-password.html'));
 });
 
 app.get('/roster', (req, res) => {
-  res.redirect(`/t${DEFAULT_TEAM_ID}/roster`);
+  if (!req.session?.userId) {
+    return res.redirect('/login');
+  }
+
+  return res.redirect(`/t${DEFAULT_TEAM_ID}/roster`);
 });
 
-app.get('/t:teamId/roster', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'roster.html'));
+app.get('/t:teamId/roster', async (req, res) => {
+  if (!req.session?.userId) {
+    return res.redirect('/login');
+  }
+
+  const teamId = resolveTeamId(req.params.teamId);
+  if (!(await userHasTeamAccess(req.session.userId, teamId))) {
+    return res.redirect('/teams');
+  }
+
+  return res.sendFile(path.join(__dirname, '..', 'public', 'roster.html'));
 });
 
 app.get('/games', (req, res) => {
-  res.redirect(`/t${DEFAULT_TEAM_ID}/games`);
+  if (!req.session?.userId) {
+    return res.redirect('/login');
+  }
+
+  return res.redirect(`/t${DEFAULT_TEAM_ID}/games`);
 });
 
-app.get('/t:teamId/games', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'games.html'));
+app.get('/t:teamId/games', async (req, res) => {
+  if (!req.session?.userId) {
+    return res.redirect('/login');
+  }
+
+  const teamId = resolveTeamId(req.params.teamId);
+  if (!(await userHasTeamAccess(req.session.userId, teamId))) {
+    return res.redirect('/teams');
+  }
+
+  return res.sendFile(path.join(__dirname, '..', 'public', 'games.html'));
 });
 
 app.get('/new-game', (req, res) => {
-  res.redirect(`/t${DEFAULT_TEAM_ID}/new-game`);
+  if (!req.session?.userId) {
+    return res.redirect('/login');
+  }
+
+  return res.redirect(`/t${DEFAULT_TEAM_ID}/new-game`);
 });
 
-app.get('/t:teamId/new-game', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'new-game.html'));
+app.get('/t:teamId/new-game', async (req, res) => {
+  if (!req.session?.userId) {
+    return res.redirect('/login');
+  }
+
+  const teamId = resolveTeamId(req.params.teamId);
+  if (!(await userHasTeamAccess(req.session.userId, teamId))) {
+    return res.redirect('/teams');
+  }
+
+  return res.sendFile(path.join(__dirname, '..', 'public', 'new-game.html'));
 });
 
 app.get('/teams', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'teams.html'));
+  if (!req.session?.userId) {
+    return res.redirect('/login');
+  }
+
+  return res.sendFile(path.join(__dirname, '..', 'public', 'teams.html'));
 });
 
 app.get('/games/:gameId', async (req, res) => {
+  if (!req.session?.userId) {
+    return res.redirect('/login');
+  }
+
   const game = await db.get('SELECT team_id FROM games WHERE id = ?', [resolveGameId(req.params.gameId)]);
   const teamId = game && game.team_id ? game.team_id : DEFAULT_TEAM_ID;
-  res.redirect(`/t${teamId}/games/${req.params.gameId}`);
+  return res.redirect(`/t${teamId}/games/${req.params.gameId}`);
 });
 
-app.get('/t:teamId/games/:gameId', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+app.get('/t:teamId/games/:gameId', async (req, res) => {
+  if (!req.session?.userId) {
+    return res.redirect('/login');
+  }
+
+  const teamId = resolveTeamId(req.params.teamId);
+  if (!(await userHasTeamAccess(req.session.userId, teamId))) {
+    return res.redirect('/teams');
+  }
+
+  return res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
 app.use(express.static(path.join(__dirname, '..', 'public')));

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Login</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="auth-shell">
+      <div class="auth-card">
+        <p class="eyebrow">Welcome back</p>
+        <h1>Login</h1>
+
+        <form id="login-form" class="auth-form">
+          <div class="field-group">
+            <label for="login-email">Email</label>
+            <input id="login-email" name="email" type="email" placeholder="you@example.com" required />
+          </div>
+
+          <div class="field-group">
+            <label for="login-password">Password</label>
+            <input id="login-password" name="password" type="password" placeholder="Password" required />
+          </div>
+
+          <button type="submit" class="primary-btn">Login</button>
+        </form>
+
+        <p class="auth-links">
+          Need an account? <a href="/register">Create one</a>
+        </p>
+        <p class="auth-links">
+          Forgot your password? <a href="/forgot-password">Reset it</a>
+        </p>
+        <div id="auth-message" class="auth-message"></div>
+      </div>
+    </div>
+
+    <script>
+      const authMessage = document.getElementById('auth-message');
+
+      function setMessage(message, type = 'error') {
+        authMessage.textContent = message;
+        authMessage.className = `auth-message ${type}`;
+      }
+
+      const storedAuthMessage = window.sessionStorage.getItem('authMessage');
+      if (storedAuthMessage) {
+        setMessage(storedAuthMessage, 'success');
+        window.sessionStorage.removeItem('authMessage');
+      }
+
+      window.sessionStorage.removeItem('currentTeamId');
+
+      document.getElementById('login-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+
+        const formData = new FormData(event.currentTarget);
+        const payload = {
+          email: String(formData.get('email') || '').trim(),
+          password: String(formData.get('password') || '')
+        };
+
+        window.sessionStorage.removeItem('currentTeamId');
+
+        const response = await fetch('/api/login', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          setMessage(data.message || 'Unable to log in.', 'error');
+          return;
+        }
+
+        setMessage('Login successful. Redirecting...', 'success');
+        window.location.href = '/teams';
+      });
+    </script>
+  </body>
+</html>

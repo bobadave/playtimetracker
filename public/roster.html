@@ -45,10 +45,24 @@
         <table class="data-table">
           <thead>
             <tr>
-              <th>ID</th>
-              <th>First Name</th>
-              <th>Last Name</th>
-              <th>Cumulative Time</th>
+              <th>
+                First Name
+                <button type="button" class="sort-btn" data-sort-field="firstName" aria-label="Sort by first name">
+                  <span class="sort-arrow" data-sort-arrow="firstName">⇅</span>
+                </button>
+              </th>
+              <th>
+                Last Name
+                <button type="button" class="sort-btn" data-sort-field="lastName" aria-label="Sort by last name">
+                  <span class="sort-arrow" data-sort-arrow="lastName">⇅</span>
+                </button>
+              </th>
+              <th>
+                Cumulative Time
+                <button type="button" class="sort-btn" data-sort-field="cumulativeSeconds" aria-label="Sort by cumulative time">
+                  <span class="sort-arrow" data-sort-arrow="cumulativeSeconds">⇅</span>
+                </button>
+              </th>
               <th>Action</th>
             </tr>
           </thead>
@@ -89,7 +103,10 @@
       const state = {
         editingPlayerId: null,
         archivedCount: 0,
-        currentTeamId: 1
+        currentTeamId: 1,
+        players: [],
+        sortField: null,
+        sortDirection: 'asc'
       };
 
       function escapeHtml(value = '') {
@@ -174,22 +191,59 @@
         }
       }
 
+      function sortPlayers(players) {
+        const { sortField, sortDirection } = state;
+        if (!sortField) {
+          return players;
+        }
+
+        const direction = sortDirection === 'desc' ? -1 : 1;
+
+        return [...players].sort((a, b) => {
+          if (sortField === 'cumulativeSeconds') {
+            const aValue = Number(a.cumulativeSeconds) || 0;
+            const bValue = Number(b.cumulativeSeconds) || 0;
+            return (aValue - bValue) * direction;
+          }
+
+          const aValue = String(a[sortField] || '').toLowerCase();
+          const bValue = String(b[sortField] || '').toLowerCase();
+          if (aValue < bValue) return -1 * direction;
+          if (aValue > bValue) return 1 * direction;
+          return 0;
+        });
+      }
+
+      function updateSortIndicators() {
+        document.querySelectorAll('.sort-arrow').forEach((arrowEl) => {
+          const field = arrowEl.dataset.sortArrow;
+          if (state.sortField !== field) {
+            arrowEl.textContent = '⇅';
+            arrowEl.classList.remove('active');
+            return;
+          }
+
+          arrowEl.textContent = state.sortDirection === 'asc' ? '▲' : '▼';
+          arrowEl.classList.add('active');
+        });
+      }
+
       function renderRoster(players) {
         const tbody = document.getElementById('roster-body');
         const unarchiveBtn = document.getElementById('unarchive-btn');
-        const visiblePlayers = players.filter((player) => !player.archive);
+        const visiblePlayers = sortPlayers(players.filter((player) => !player.archive));
         const archivedPlayers = players.filter((player) => player.archive);
 
         state.archivedCount = archivedPlayers.length;
         unarchiveBtn.classList.toggle('hidden', archivedPlayers.length === 0);
         renderRosterChart(players);
+        updateSortIndicators();
 
         tbody.innerHTML = visiblePlayers.map((player) => {
           const editing = Number(state.editingPlayerId) === Number(player.id);
 
           return `
             <tr>
-              <td>${player.id}</td>
               <td>${editing ? `<input class="inline-input" data-field="firstName" value="${escapeHtml(player.firstName)}" />` : escapeHtml(player.firstName)}</td>
               <td>${editing ? `<input class="inline-input" data-field="lastName" value="${escapeHtml(player.lastName)}" />` : escapeHtml(player.lastName)}</td>
               <td>${formatDuration(player.cumulativeSeconds ?? player.totalSeconds)}</td>
@@ -211,7 +265,19 @@
         }
 
         const players = await response.json();
+        state.players = players;
         renderRoster(players);
+      }
+
+      function setSortField(field) {
+        if (state.sortField === field) {
+          state.sortDirection = state.sortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+          state.sortField = field;
+          state.sortDirection = 'asc';
+        }
+
+        renderRoster(state.players);
       }
 
       async function updatePlayer(playerId, payload) {
@@ -372,6 +438,9 @@
           }
         });
         document.getElementById('roster-body').addEventListener('click', handleRosterAction);
+        document.querySelectorAll('.sort-btn').forEach((button) => {
+          button.addEventListener('click', () => setSortField(button.dataset.sortField));
+        });
         document.getElementById('unarchive-btn').addEventListener('click', async () => {
           try {
             await unarchivePlayers();
