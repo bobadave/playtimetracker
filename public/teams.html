@@ -31,19 +31,7 @@
       </header>
 
       <main class="content-panel">
-        <div class="table-scroll">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Team Name</th>
-              <th>Players</th>
-              <th>Games</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="teams-body"></tbody>
-        </table>
-        </div>
+        <div id="teams-list" class="team-list"></div>
       </main>
     </div>
 
@@ -105,7 +93,8 @@
       const teamsState = {
         teams: [],
         editingTeamId: null,
-        pendingRemoveTeamId: null
+        pendingRemoveTeamId: null,
+        expandedTeamIds: new Set()
       };
 
       function escapeHtml(value = '') {
@@ -234,38 +223,47 @@
 
       function renderTeamRow(team) {
         const editing = Number(teamsState.editingTeamId) === Number(team.id);
+        const expanded = editing || teamsState.expandedTeamIds.has(Number(team.id));
 
-        if (editing) {
-          return `
-            <tr data-team-id="${team.id}">
-              <td><input type="text" class="inline-input edit-team-name" value="${escapeHtml(team.teamName)}" /></td>
-              <td>${team.playerCount} on roster</td>
-              <td>${team.gameCount} games</td>
-              <td class="row-actions">
-                <button type="button" class="secondary-btn small-btn" data-action="cancel" data-team-id="${team.id}">Cancel</button>
-                <button type="button" class="danger-btn small-btn" data-action="remove" data-team-id="${team.id}">Remove Team</button>
-                <button type="button" class="primary-btn small-btn" data-action="update" data-team-id="${team.id}">Update</button>
-              </td>
-            </tr>
+        const detailsContent = editing
+          ? `
+            <div class="field-group">
+              <label for="edit-team-name-${team.id}">Team Name</label>
+              <input id="edit-team-name-${team.id}" type="text" class="inline-input edit-team-name" value="${escapeHtml(team.teamName)}" />
+            </div>
+            <div class="row-actions">
+              <button type="button" class="secondary-btn small-btn" data-action="cancel" data-team-id="${team.id}">Cancel</button>
+              <button type="button" class="danger-btn small-btn" data-action="remove" data-team-id="${team.id}">Remove Team</button>
+              <button type="button" class="primary-btn small-btn" data-action="update" data-team-id="${team.id}">Update</button>
+            </div>
+          `
+          : `
+            <div class="team-row-stats">
+              <a href="/t${team.id}/roster" class="secondary-btn small-btn">${team.playerCount} on roster</a>
+              <a href="/t${team.id}/games" class="secondary-btn small-btn">${team.gameCount} games</a>
+              <button type="button" class="secondary-btn small-btn" data-action="edit" data-team-id="${team.id}">Edit</button>
+            </div>
           `;
-        }
 
         return `
-          <tr data-team-id="${team.id}">
-            <td><a href="/t${team.id}/games">${escapeHtml(team.teamName)}</a></td>
-            <td><a href="/t${team.id}/roster" class="secondary-btn small-btn">${team.playerCount} on roster</a></td>
-            <td><a href="/t${team.id}/games" class="secondary-btn small-btn">${team.gameCount} games</a></td>
-            <td class="row-actions">
-              <button type="button" class="secondary-btn small-btn" data-action="edit" data-team-id="${team.id}">Edit</button>
-            </td>
-          </tr>
+          <div class="team-row" data-team-id="${team.id}" data-expanded="${expanded}">
+            <button type="button" class="team-row-summary" data-action="toggle" data-team-id="${team.id}" aria-expanded="${expanded}">
+              <span class="team-row-name">${escapeHtml(team.teamName)}</span>
+              <span class="team-row-chevron" aria-hidden="true">⌄</span>
+            </button>
+            <div class="team-row-details">
+              <div class="team-row-details-inner">
+              ${detailsContent}
+              </div>
+            </div>
+          </div>
         `;
       }
 
       function renderTeamsTable() {
-        const tableBody = document.getElementById('teams-body');
+        const list = document.getElementById('teams-list');
         const sortedTeams = [...teamsState.teams].sort((a, b) => String(a.teamName || '').localeCompare(String(b.teamName || '')));
-        tableBody.innerHTML = sortedTeams.map(renderTeamRow).join('');
+        list.innerHTML = sortedTeams.map(renderTeamRow).join('');
       }
 
       async function loadTeams() {
@@ -280,7 +278,7 @@
       }
 
       async function updateTeam(teamId) {
-        const row = document.querySelector(`tr[data-team-id="${teamId}"]`);
+        const row = document.querySelector(`.team-row[data-team-id="${teamId}"]`);
         const teamName = row.querySelector('.edit-team-name').value.trim();
 
         if (!teamName) {
@@ -350,8 +348,19 @@
         const teamId = Number(button.dataset.teamId);
         const { action } = button.dataset;
 
-        if (action === 'edit') {
+        if (action === 'toggle') {
+          if (teamsState.expandedTeamIds.has(teamId)) {
+            teamsState.expandedTeamIds.delete(teamId);
+            if (teamsState.editingTeamId === teamId) {
+              teamsState.editingTeamId = null;
+            }
+          } else {
+            teamsState.expandedTeamIds.add(teamId);
+          }
+          renderTeamsTable();
+        } else if (action === 'edit') {
           teamsState.editingTeamId = teamId;
+          teamsState.expandedTeamIds.add(teamId);
           renderTeamsTable();
         } else if (action === 'cancel') {
           teamsState.editingTeamId = null;
@@ -381,7 +390,7 @@
           }
         });
 
-        document.getElementById('teams-body').addEventListener('click', handleTeamsTableClick);
+        document.getElementById('teams-list').addEventListener('click', handleTeamsTableClick);
         document.getElementById('close-remove-team-modal').addEventListener('click', closeRemoveTeamModal);
         document.getElementById('cancel-remove-team-btn').addEventListener('click', closeRemoveTeamModal);
         document.getElementById('confirm-remove-team-btn').addEventListener('click', confirmRemoveTeam);

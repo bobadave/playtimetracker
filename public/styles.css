@@ -139,6 +139,34 @@ button, input {
   gap: 16px;
 }
 
+.profile-name-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.profile-name-row .profile-value {
+  margin: 0;
+}
+
+.password-update-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.password-update-row .inline-input {
+  flex: 1;
+  min-width: 160px;
+}
+
+.field-hint {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 .header-actions {
   display: flex;
   align-items: center;
@@ -607,6 +635,7 @@ button, input {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   white-space: nowrap;
 }
@@ -642,10 +671,103 @@ button, input {
   -webkit-overflow-scrolling: touch;
 }
 
+.team-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.team-row {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.team-row-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 16px 18px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.team-row-summary:hover {
+  background: #f5f8fc;
+}
+
+.team-row-name {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.team-row-chevron {
+  color: var(--muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  transition: transform 0.2s ease;
+}
+
+.team-row[data-expanded="true"] .team-row-chevron {
+  transform: rotate(180deg);
+}
+
+.team-row-details {
+  display: grid;
+  grid-template-rows: 0fr;
+  min-height: 0;
+  transition: grid-template-rows 0.2s ease;
+}
+
+.team-row[data-expanded="true"] .team-row-details {
+  grid-template-rows: 1fr;
+}
+
+.team-row-details-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.team-row-details .field-group,
+.team-row-details .team-row-stats,
+.team-row-details .row-actions {
+  padding: 0 18px 16px;
+}
+
+.team-row-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.team-row-details .row-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
 .data-table {
   width: 100%;
   min-width: 520px;
   border-collapse: collapse;
+}
+
+.data-table--fit {
+  min-width: 0;
+}
+
+.name-edit-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.name-edit-fields .inline-input {
+  min-width: 0;
 }
 
 .data-table th,

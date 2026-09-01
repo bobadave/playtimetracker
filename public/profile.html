@@ -31,7 +31,18 @@
         <section class="roster-chart-card profile-fields">
           <div class="field-group">
             <label>Name</label>
-            <p id="profile-name" class="profile-value">--</p>
+            <div id="profile-name-view" class="profile-name-row">
+              <p id="profile-name" class="profile-value">--</p>
+              <button type="button" id="edit-name-btn" class="secondary-btn small-btn">Edit</button>
+            </div>
+            <div id="profile-name-edit" class="name-edit-fields hidden">
+              <input id="profile-first-name-input" type="text" class="inline-input" placeholder="First name" />
+              <input id="profile-last-name-input" type="text" class="inline-input" placeholder="Last name" />
+              <div class="row-actions">
+                <button type="button" id="cancel-name-btn" class="secondary-btn small-btn">Cancel</button>
+                <button type="button" id="save-name-btn" class="primary-btn small-btn">Save</button>
+              </div>
+            </div>
           </div>
           <div class="field-group">
             <label>Email</label>
@@ -44,6 +55,15 @@
           <div class="field-group">
             <label>Member Since</label>
             <p id="profile-created" class="profile-value">--</p>
+          </div>
+          <div class="field-group">
+            <label for="profile-new-password">Change Password</label>
+            <div class="password-update-row">
+              <input id="profile-new-password" type="password" class="inline-input" placeholder="New password" minlength="6" />
+              <button type="button" id="update-password-btn" class="primary-btn small-btn">Update</button>
+            </div>
+            <p class="field-hint">Must be at least 6 characters.</p>
+            <p id="password-update-message" class="auth-message"></p>
           </div>
         </section>
 
@@ -90,6 +110,11 @@
         return date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
       }
 
+      const profileState = {
+        firstName: '',
+        lastName: ''
+      };
+
       async function loadProfile() {
         const response = await fetch('/api/session');
         if (!response.ok) {
@@ -102,6 +127,9 @@
           return;
         }
 
+        profileState.firstName = user.firstName;
+        profileState.lastName = user.lastName;
+
         const fullName = `${user.firstName} ${user.lastName}`.trim();
         document.getElementById('profile-name').textContent = fullName;
         document.getElementById('profile-email').textContent = user.email;
@@ -111,6 +139,83 @@
         verifiedEl.textContent = user.emailVerified ? 'Verified' : 'Unverified';
         verifiedEl.classList.toggle('active', user.emailVerified);
         verifiedEl.classList.toggle('inactive', !user.emailVerified);
+      }
+
+      function openNameEdit() {
+        document.getElementById('profile-first-name-input').value = profileState.firstName;
+        document.getElementById('profile-last-name-input').value = profileState.lastName;
+        document.getElementById('profile-name-view').classList.add('hidden');
+        document.getElementById('profile-name-edit').classList.remove('hidden');
+        document.getElementById('profile-first-name-input').focus();
+      }
+
+      function closeNameEdit() {
+        document.getElementById('profile-name-edit').classList.add('hidden');
+        document.getElementById('profile-name-view').classList.remove('hidden');
+      }
+
+      async function saveName() {
+        const firstName = document.getElementById('profile-first-name-input').value.trim();
+        const lastName = document.getElementById('profile-last-name-input').value.trim();
+
+        if (!firstName || !lastName) {
+          alert('Please enter both a first and last name.');
+          return;
+        }
+
+        const response = await fetch('/api/profile', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ firstName, lastName })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          alert(errorData.message || 'Unable to update name.');
+          return;
+        }
+
+        const { user } = await response.json();
+        profileState.firstName = user.firstName;
+        profileState.lastName = user.lastName;
+        document.getElementById('profile-name').textContent = `${user.firstName} ${user.lastName}`.trim();
+        closeNameEdit();
+      }
+
+      function setPasswordMessage(message, type = 'error') {
+        const el = document.getElementById('password-update-message');
+        el.textContent = message;
+        el.className = `auth-message ${type}`;
+      }
+
+      async function updatePassword() {
+        const input = document.getElementById('profile-new-password');
+        const password = input.value;
+
+        if (!password.trim()) {
+          setPasswordMessage('Enter a new password before updating.', 'error');
+          return;
+        }
+
+        const response = await fetch('/api/profile/password', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ password })
+        });
+
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          setPasswordMessage(data.message || 'Unable to update password.', 'error');
+          return;
+        }
+
+        input.value = '';
+        setPasswordMessage(data.message || 'Password updated successfully.', 'success');
       }
 
       async function loadProfileTeams() {
@@ -146,6 +251,11 @@
       document.addEventListener('DOMContentLoaded', () => {
         initMenu();
         updateTeamScopedMenuLinks();
+
+        document.getElementById('edit-name-btn').addEventListener('click', openNameEdit);
+        document.getElementById('cancel-name-btn').addEventListener('click', closeNameEdit);
+        document.getElementById('save-name-btn').addEventListener('click', saveName);
+        document.getElementById('update-password-btn').addEventListener('click', updatePassword);
 
         loadProfile().catch((error) => {
           console.error(error);

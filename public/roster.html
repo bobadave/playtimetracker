@@ -43,19 +43,13 @@
         </section>
 
         <div class="table-scroll">
-        <table class="data-table">
+        <table id="roster-table" class="data-table data-table--fit">
           <thead>
             <tr>
               <th>
-                First Name
-                <button type="button" class="sort-btn" data-sort-field="firstName" aria-label="Sort by first name">
-                  <span class="sort-arrow" data-sort-arrow="firstName">⇅</span>
-                </button>
-              </th>
-              <th>
-                Last Name
-                <button type="button" class="sort-btn" data-sort-field="lastName" aria-label="Sort by last name">
-                  <span class="sort-arrow" data-sort-arrow="lastName">⇅</span>
+                Name
+                <button type="button" class="sort-btn" data-sort-field="name" aria-label="Sort by name">
+                  <span class="sort-arrow" data-sort-arrow="name">⇅</span>
                 </button>
               </th>
               <th>
@@ -208,8 +202,12 @@
             return (aValue - bValue) * direction;
           }
 
-          const aValue = String(a[sortField] || '').toLowerCase();
-          const bValue = String(b[sortField] || '').toLowerCase();
+          const aValue = sortField === 'name'
+            ? `${a.firstName || ''} ${a.lastName || ''}`.trim().toLowerCase()
+            : String(a[sortField] || '').toLowerCase();
+          const bValue = sortField === 'name'
+            ? `${b.firstName || ''} ${b.lastName || ''}`.trim().toLowerCase()
+            : String(b[sortField] || '').toLowerCase();
           if (aValue < bValue) return -1 * direction;
           if (aValue > bValue) return 1 * direction;
           return 0;
@@ -244,10 +242,18 @@
         tbody.innerHTML = visiblePlayers.map((player) => {
           const editing = Number(state.editingPlayerId) === Number(player.id);
 
+          const nameCell = editing
+            ? `
+              <div class="name-edit-fields">
+                <input class="inline-input" data-field="firstName" placeholder="First" value="${escapeHtml(player.firstName)}" />
+                <input class="inline-input" data-field="lastName" placeholder="Last" value="${escapeHtml(player.lastName)}" />
+              </div>
+            `
+            : escapeHtml(`${player.firstName} ${player.lastName}`.trim());
+
           return `
             <tr>
-              <td>${editing ? `<input class="inline-input" data-field="firstName" value="${escapeHtml(player.firstName)}" />` : escapeHtml(player.firstName)}</td>
-              <td>${editing ? `<input class="inline-input" data-field="lastName" value="${escapeHtml(player.lastName)}" />` : escapeHtml(player.lastName)}</td>
+              <td>${nameCell}</td>
               <td>${formatDuration(player.cumulativeSeconds ?? player.totalSeconds)}</td>
               <td class="row-actions">
                 ${editing
