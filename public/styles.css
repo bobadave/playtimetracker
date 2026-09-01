@@ -43,6 +43,7 @@ button, input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 20px;
 }
@@ -162,6 +163,7 @@ button, input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -245,6 +247,7 @@ button, input {
 .date-selects {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .game-meta-label {
@@ -633,8 +636,15 @@ button, input {
   font: inherit;
 }
 
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .data-table {
   width: 100%;
+  min-width: 520px;
   border-collapse: collapse;
 }
 
@@ -943,5 +953,37 @@ h1 {
 @media (max-width: 780px) {
   .layout {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .page-shell,
+  .app-shell {
+    padding: 14px;
+  }
+
+  h1 {
+    font-size: clamp(1.5rem, 7vw, 2rem);
+  }
+
+  .header-actions {
+    width: 100%;
+  }
+
+  .header-actions .primary-btn,
+  .header-actions .secondary-btn {
+    width: 100%;
+  }
+
+  .content-panel {
+    padding: 14px;
+  }
+
+  .modal-dialog {
+    padding: 18px;
+  }
+
+  .stage-header .game-toggle-btn {
+    width: 100%;
   }
 }

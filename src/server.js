@@ -1150,6 +1150,26 @@ app.post('/api/login', async (req, res) => {
   });
 });
 
+app.post('/api/resend-verification', async (req, res) => {
+  const normalizedEmail = String(req.body?.email ?? '').trim().toLowerCase();
+  if (!normalizedEmail) {
+    return res.status(400).json({ message: 'Email is required.' });
+  }
+
+  const user = await db.get('SELECT * FROM users WHERE email = ?', [normalizedEmail]);
+  if (!user) {
+    return res.status(404).json({ message: 'No account was found with that email address.' });
+  }
+
+  if (Number(user.email_verified) === 1) {
+    return res.status(409).json({ message: 'This account is already verified. You can log in.' });
+  }
+
+  await sendVerificationEmail(user);
+
+  return res.json({ message: 'Verification email resent. Please check your inbox.' });
+});
+
 app.post('/api/logout', (req, res) => {
   req.session.destroy((error) => {
     if (error) {

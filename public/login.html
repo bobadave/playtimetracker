@@ -33,16 +33,24 @@
           Forgot your password? <a href="/forgot-password">Reset it</a>
         </p>
         <div id="auth-message" class="auth-message"></div>
+        <button type="button" id="resend-verification-btn" class="secondary-btn small-btn hidden" style="margin-top: 10px;">Resend verification email</button>
       </div>
     </div>
 
     <script src="/styles.js"></script>
     <script>
       const authMessage = document.getElementById('auth-message');
+      const resendBtn = document.getElementById('resend-verification-btn');
 
       function setMessage(message, type = 'error') {
         authMessage.textContent = message;
         authMessage.className = `auth-message ${type}`;
+      }
+
+      function setResendVisible(visible) {
+        resendBtn.classList.toggle('hidden', !visible);
+        resendBtn.disabled = false;
+        resendBtn.textContent = 'Resend verification email';
       }
 
       const storedAuthMessage = window.sessionStorage.getItem('authMessage');
@@ -75,11 +83,44 @@
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
           setMessage(data.message || 'Unable to log in.', 'error');
+          setResendVisible(response.status === 403);
           return;
         }
 
+        setResendVisible(false);
         setMessage('Login successful. Redirecting...', 'success');
         window.location.href = '/teams';
+      });
+
+      resendBtn.addEventListener('click', async () => {
+        const email = String(document.getElementById('login-email').value || '').trim();
+        if (!email) {
+          setMessage('Enter your email above first.', 'error');
+          return;
+        }
+
+        resendBtn.disabled = true;
+        resendBtn.textContent = 'Sending...';
+
+        const response = await fetch('/api/resend-verification', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ email })
+        });
+
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          setMessage(data.message || 'Unable to resend verification email.', 'error');
+          resendBtn.disabled = false;
+          resendBtn.textContent = 'Resend verification email';
+          return;
+        }
+
+        setMessage(data.message || 'Verification email resent.', 'success');
+        setResendVisible(false);
       });
     </script>
   </body>
