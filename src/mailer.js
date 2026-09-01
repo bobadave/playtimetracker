@@ -22,15 +22,20 @@ async function sendMail({ to, subject, text, html }) {
     return { delivered: false };
   }
 
-  await transporter.sendMail({
-    from: SMTP_FROM || SMTP_USER,
-    to,
-    subject,
-    text,
-    html
-  });
+  try {
+    await transporter.sendMail({
+      from: SMTP_FROM || SMTP_USER,
+      to,
+      subject,
+      text,
+      html
+    });
 
-  return { delivered: true };
+    return { delivered: true };
+  } catch (error) {
+    console.error(`[Email] Failed to send "${subject}" to ${to}:`, error.message);
+    return { delivered: false, error: error.message };
+  }
 }
 
 module.exports = { sendMail, isConfigured };
