@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Profile</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar page-header">
+        <div class="menu-wrap">
+          <button id="menu-toggle" class="hamburger-btn" type="button" aria-expanded="false" aria-label="Open menu">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+          <nav id="menu-panel" class="menu-panel hidden" aria-label="Main menu">
+            <a href="/teams">Teams</a>
+            <a id="roster-link" href="/t1/roster">Player Roster</a>
+            <a id="games-link" href="/t1/games">Games</a>
+          </nav>
+        </div>
+        <div>
+          <p class="eyebrow">Account</p>
+          <h1>Profile</h1>
+        </div>
+      </header>
+
+      <main class="content-panel">
+        <section class="roster-chart-card profile-fields">
+          <div class="field-group">
+            <label>Name</label>
+            <p id="profile-name" class="profile-value">--</p>
+          </div>
+          <div class="field-group">
+            <label>Email</label>
+            <p id="profile-email" class="profile-value">--</p>
+          </div>
+          <div class="field-group">
+            <label>Email Status</label>
+            <p><span id="profile-verified" class="status-pill inactive">Unverified</span></p>
+          </div>
+          <div class="field-group">
+            <label>Member Since</label>
+            <p id="profile-created" class="profile-value">--</p>
+          </div>
+        </section>
+
+        <h2>My Teams</h2>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Team Name</th>
+              <th>Players</th>
+              <th>Games</th>
+            </tr>
+          </thead>
+          <tbody id="profile-teams-body"></tbody>
+        </table>
+        <div id="profile-teams-empty" class="empty-state hidden">
+          <p>You are not a member of any teams yet.</p>
+        </div>
+      </main>
+    </div>
+
+    <script src="/styles.js"></script>
+    <script>
+      function escapeHtml(value = '') {
+        return String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/\"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function formatDate(isoString) {
+        if (!isoString) {
+          return '--';
+        }
+
+        const date = new Date(isoString);
+        if (Number.isNaN(date.getTime())) {
+          return '--';
+        }
+
+        return date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+      }
+
+      async function loadProfile() {
+        const response = await fetch('/api/session');
+        if (!response.ok) {
+          throw new Error('Unable to load profile.');
+        }
+
+        const { user } = await response.json();
+        if (!user) {
+          window.location.href = '/login';
+          return;
+        }
+
+        const fullName = `${user.firstName} ${user.lastName}`.trim();
+        document.getElementById('profile-name').textContent = fullName;
+        document.getElementById('profile-email').textContent = user.email;
+        document.getElementById('profile-created').textContent = formatDate(user.createdAt);
+
+        const verifiedEl = document.getElementById('profile-verified');
+        verifiedEl.textContent = user.emailVerified ? 'Verified' : 'Unverified';
+        verifiedEl.classList.toggle('active', user.emailVerified);
+        verifiedEl.classList.toggle('inactive', !user.emailVerified);
+      }
+
+      async function loadProfileTeams() {
+        const response = await fetch('/api/teams');
+        if (!response.ok) {
+          throw new Error('Unable to load teams.');
+        }
+
+        const { teams = [] } = await response.json();
+        const tableBody = document.getElementById('profile-teams-body');
+        const table = tableBody.closest('table');
+        const emptyState = document.getElementById('profile-teams-empty');
+
+        if (teams.length === 0) {
+          table.classList.add('hidden');
+          emptyState.classList.remove('hidden');
+          return;
+        }
+
+        table.classList.remove('hidden');
+        emptyState.classList.add('hidden');
+
+        const sortedTeams = [...teams].sort((a, b) => String(a.teamName || '').localeCompare(String(b.teamName || '')));
+        tableBody.innerHTML = sortedTeams.map((team) => `
+          <tr>
+            <td><a href="/t${team.id}/games">${escapeHtml(team.teamName)}</a></td>
+            <td>${team.playerCount} on roster</td>
+            <td>${team.gameCount} games</td>
+          </tr>
+        `).join('');
+      }
+
+      document.addEventListener('DOMContentLoaded', () => {
+        initMenu();
+        updateTeamScopedMenuLinks();
+
+        loadProfile().catch((error) => {
+          console.error(error);
+        });
+
+        loadProfileTeams().catch((error) => {
+          console.error(error);
+        });
+      });
+    </script>
+  </body>
+</html>
