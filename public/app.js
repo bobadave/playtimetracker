@@ -99,7 +99,15 @@ function formatPercent(playerSeconds, totalSeconds) {
   return `${getSharePercentage(playerSeconds, totalSeconds).toFixed(1)}%`;
 }
 
+const supportsTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
 function attachDragHandlers(element, playerId) {
+  element.dataset.playerId = String(playerId);
+
+  if (supportsTouch) {
+    return;
+  }
+
   element.addEventListener('dragstart', (event) => {
     event.dataTransfer.setData('text/plain', String(playerId));
     event.dataTransfer.effectAllowed = 'move';
@@ -144,7 +152,10 @@ function renderPlayers(players) {
 
   if (activePlayers.length === 0) {
     stageEl.classList.add('is-empty');
-    stageEl.innerHTML = '<div class="empty-state">Drop players on to field to track play time.</div>';
+    const emptyMessage = isGameActive
+      ? 'Drop players on to field to track play time.'
+      : 'Resume game to bring players on to field.';
+    stageEl.innerHTML = `<div class="empty-state">${emptyMessage}</div>`;
   } else {
     stageEl.classList.remove('is-empty');
 
@@ -155,7 +166,7 @@ function renderPlayers(players) {
       if (uiClass) {
         stagePlayer.classList.add(uiClass);
       }
-      stagePlayer.draggable = true;
+      stagePlayer.draggable = !supportsTouch;
       stagePlayer.innerHTML = `
         <div class="player-meta">
           <span class="player-name">${escapeHtml(player.fullName)}</span>
@@ -186,7 +197,7 @@ function renderPlayers(players) {
     if (uiClass) {
       playerCard.classList.add(uiClass);
     }
-    playerCard.draggable = true;
+    playerCard.draggable = !supportsTouch;
     playerCard.innerHTML = `
       <div class="player-meta">
         <span class="player-name">${escapeHtml(player.fullName)}</span>
@@ -338,8 +349,140 @@ function setupDropZones() {
   }
 }
 
+function setupTouchDragAndDrop() {
+  if (!supportsTouch) {
+    return;
+  }
+
+  const DRAG_THRESHOLD_PX = 8;
+  const EDGE_SCROLL_ZONE_PX = 70;
+  const EDGE_SCROLL_SPEED_PX = 14;
+  let dragState = null;
+  let edgeScrollInterval = null;
+  let lastTouchY = null;
+
+  function startEdgeScrollLoop() {
+    if (edgeScrollInterval) {
+      return;
+    }
+
+    edgeScrollInterval = setInterval(() => {
+      if (lastTouchY === null) {
+        return;
+      }
+
+      if (lastTouchY < EDGE_SCROLL_ZONE_PX) {
+        window.scrollBy(0, -EDGE_SCROLL_SPEED_PX);
+      } else if (lastTouchY > window.innerHeight - EDGE_SCROLL_ZONE_PX) {
+        window.scrollBy(0, EDGE_SCROLL_SPEED_PX);
+      }
+    }, 16);
+  }
+
+  function stopEdgeScrollLoop() {
+    if (edgeScrollInterval) {
+      clearInterval(edgeScrollInterval);
+      edgeScrollInterval = null;
+    }
+    lastTouchY = null;
+  }
+
+  function clearDragState() {
+    if (dragState?.ghostEl) {
+      dragState.ghostEl.remove();
+    }
+    dragState?.sourceEl?.classList.remove('drag-source-active');
+    stageEl.classList.remove('drag-target-active');
+    playerListEl.classList.remove('drag-target-active');
+    stopEdgeScrollLoop();
+    dragState = null;
+  }
+
+  function createGhost(sourceEl, x, y) {
+    const ghost = sourceEl.cloneNode(true);
+    ghost.classList.add('drag-ghost');
+    ghost.style.width = `${sourceEl.offsetWidth}px`;
+    ghost.style.left = `${x}px`;
+    ghost.style.top = `${y}px`;
+    document.body.appendChild(ghost);
+    return ghost;
+  }
+
+  document.addEventListener('touchstart', (event) => {
+    const card = event.target.closest('.player-card, .stage-player');
+    if (!card || !card.dataset.playerId) {
+      return;
+    }
+
+    const touch = event.touches[0];
+    dragState = {
+      playerId: Number(card.dataset.playerId),
+      sourceEl: card,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      ghostEl: null,
+      dragging: false
+    };
+  }, { passive: true });
+
+  document.addEventListener('touchmove', (event) => {
+    if (!dragState) {
+      return;
+    }
+
+    const touch = event.touches[0];
+
+    if (!dragState.dragging) {
+      const dx = touch.clientX - dragState.startX;
+      const dy = touch.clientY - dragState.startY;
+      if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) {
+        return;
+      }
+      dragState.dragging = true;
+      dragState.sourceEl.classList.add('drag-source-active');
+      dragState.ghostEl = createGhost(dragState.sourceEl, touch.clientX, touch.clientY);
+      startEdgeScrollLoop();
+    }
+
+    event.preventDefault();
+    lastTouchY = touch.clientY;
+    dragState.ghostEl.style.left = `${touch.clientX}px`;
+    dragState.ghostEl.style.top = `${touch.clientY}px`;
+
+    const target = document.elementFromPoint(touch.clientX, touch.clientY);
+    stageEl.classList.toggle('drag-target-active', Boolean(target && target.closest('#stage') && isGameActive));
+    playerListEl.classList.toggle('drag-target-active', Boolean(target && target.closest('#player-list')));
+  }, { passive: false });
+
+  document.addEventListener('touchend', (event) => {
+    if (!dragState) {
+      return;
+    }
+
+    if (dragState.dragging) {
+      const touch = event.changedTouches[0];
+      const target = document.elementFromPoint(touch.clientX, touch.clientY);
+      const { playerId } = dragState;
+
+      clearDragState();
+
+      if (target && target.closest('#stage')) {
+        logPlayerActivity(playerId, true);
+      } else if (target && target.closest('#player-list')) {
+        logPlayerActivity(playerId, false);
+      }
+      return;
+    }
+
+    clearDragState();
+  });
+
+  document.addEventListener('touchcancel', clearDragState);
+}
+
 async function initializeApp() {
   setupDropZones();
+  setupTouchDragAndDrop();
 
   try {
     const gameData = await fetchCurrentGame();

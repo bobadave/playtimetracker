@@ -40,7 +40,6 @@
         <table id="games-table" class="data-table">
           <thead>
             <tr>
-              <th>Game ID</th>
               <th>Name</th>
               <th>Location</th>
               <th>Date</th>
@@ -84,7 +83,6 @@
         if (editingGameId === game.id) {
           return `
             <tr data-game-id="${game.id}">
-              <td>${game.id}</td>
               <td><input type="text" class="edit-name" value="${escapeHtml(game.name || '')}" /></td>
               <td><input type="text" class="edit-location" value="${escapeHtml(game.location || '')}" /></td>
               <td><input type="date" class="edit-date" value="${escapeHtml(game.date || '')}" /></td>
@@ -105,7 +103,6 @@
 
         return `
           <tr data-game-id="${game.id}">
-            <td><a href="${href}">${game.id}</a></td>
             <td><a href="${href}">${escapeHtml(game.name || '')}</a></td>
             <td>${escapeHtml(game.location || 'TBD')}</td>
             <td>${escapeHtml(game.date || 'TBD')}</td>
