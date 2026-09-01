@@ -688,22 +688,52 @@ button, input {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  width: 100%;
+  gap: 10px;
+  padding: 10px 10px 10px 18px;
+}
+
+.team-row-name-btn {
+  flex: 1;
+  min-width: 0;
   border: none;
   background: transparent;
-  padding: 16px 18px;
+  padding: 6px 0;
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-.team-row-summary:hover {
-  background: #f5f8fc;
+.team-row-name-btn:hover .team-row-name {
+  text-decoration: underline;
 }
 
 .team-row-name {
   font-weight: 700;
   color: var(--ink);
+}
+
+.team-row-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.team-row-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.team-row-toggle:hover {
+  background: #f5f8fc;
 }
 
 .team-row-chevron {

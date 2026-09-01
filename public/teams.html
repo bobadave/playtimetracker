@@ -247,10 +247,17 @@
 
         return `
           <div class="team-row" data-team-id="${team.id}" data-expanded="${expanded}">
-            <button type="button" class="team-row-summary" data-action="toggle" data-team-id="${team.id}" aria-expanded="${expanded}">
-              <span class="team-row-name">${escapeHtml(team.teamName)}</span>
-              <span class="team-row-chevron" aria-hidden="true">⌄</span>
-            </button>
+            <div class="team-row-summary">
+              <button type="button" class="team-row-name-btn" data-action="toggle" data-team-id="${team.id}" aria-expanded="${expanded}">
+                <span class="team-row-name">${escapeHtml(team.teamName)}</span>
+              </button>
+              <div class="team-row-summary-actions">
+                <button type="button" class="primary-btn small-btn" data-action="select" data-team-id="${team.id}">Select</button>
+                <button type="button" class="team-row-toggle" data-action="toggle" data-team-id="${team.id}" aria-expanded="${expanded}" aria-label="Show more details">
+                  <span class="team-row-chevron" aria-hidden="true">⌄</span>
+                </button>
+              </div>
+            </div>
             <div class="team-row-details">
               <div class="team-row-details-inner">
               ${detailsContent}
@@ -369,7 +376,14 @@
           updateTeam(teamId);
         } else if (action === 'remove') {
           openRemoveTeamModal(teamId);
+        } else if (action === 'select') {
+          selectTeam(teamId);
         }
+      }
+
+      function selectTeam(teamId) {
+        setStoredTeamId(teamId);
+        window.location.href = `/t${teamId}/games`;
       }
 
       document.addEventListener('DOMContentLoaded', () => {
