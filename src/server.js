@@ -90,11 +90,7 @@ async function getCurrentUserTeamIds(userId) {
   return parseUserTeamIds(user?.team_ids || '[]');
 }
 
-function generateVerificationToken() {
-  return crypto.randomBytes(32).toString('hex');
-}
-
-function generateResetToken() {
+function generateSecureToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
@@ -108,7 +104,7 @@ function escapeHtml(value = '') {
 }
 
 async function sendVerificationEmail(user) {
-  const token = generateVerificationToken();
+  const token = generateSecureToken();
   await db.run('UPDATE users SET verification_token = ? WHERE id = ?', [token, user.id]);
 
   const verificationUrl = `${APP_BASE_URL}/verify-email?token=${encodeURIComponent(token)}`;
@@ -126,7 +122,7 @@ async function sendVerificationEmail(user) {
 }
 
 async function sendPasswordResetEmail(user) {
-  const token = generateResetToken();
+  const token = generateSecureToken();
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
   await db.run(
     'UPDATE users SET reset_token = ?, reset_expires_at = ? WHERE id = ?',
@@ -291,6 +287,11 @@ app.get('/api/game', async (req, res) => {
 });
 
 app.get('/api/game/:gameId', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
   const gameId = resolveGameId(req.params.gameId);
   const game = await db.get(`
     SELECT g.*, t.team_name AS team_name
@@ -298,6 +299,15 @@ app.get('/api/game/:gameId', async (req, res) => {
     LEFT JOIN teams t ON t.id = g.team_id
     WHERE g.id = ?
   `, [gameId]);
+
+  if (!game) {
+    return res.status(404).json({ message: 'Game not found.' });
+  }
+
+  if (!(await userHasTeamAccess(currentUserId, game.team_id))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
   res.json({ game });
 });
 
@@ -321,6 +331,13 @@ app.get('/api/games', async (req, res) => {
   if (teamId !== null) {
     conditions.push('g.team_id = ?');
     params.push(teamId);
+  } else {
+    const memberTeamIds = await getCurrentUserTeamIds(currentUserId);
+    if (memberTeamIds.length === 0) {
+      return res.json({ games: [] });
+    }
+    conditions.push(`g.team_id IN (${memberTeamIds.map(() => '?').join(', ')})`);
+    params.push(...memberTeamIds);
   }
 
   const games = await db.all(
@@ -338,6 +355,11 @@ app.get('/api/games', async (req, res) => {
 });
 
 app.post('/api/games', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
   const { name, location, month, day, year, date, team_id } = req.body || {};
 
   const normalizedDate = date || (() => {
@@ -364,6 +386,10 @@ app.post('/api/games', async (req, res) => {
   const gameName = name && String(name).trim() ? String(name).trim() : 'Soccer Match';
   const resolvedTeamId = resolveTeamId(team_id ?? DEFAULT_TEAM_ID);
 
+  if (!(await userHasTeamAccess(currentUserId, resolvedTeamId))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
   const result = await db.run(
     'INSERT INTO games (name, created_at, location, date, is_active, team_id) VALUES (?, ?, ?, ?, ?, ?)',
     [gameName, new Date().toISOString(), String(location).trim(), normalizedDate, 1, resolvedTeamId]
@@ -379,6 +405,11 @@ app.post('/api/games', async (req, res) => {
 });
 
 app.put('/api/game/status', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
   const { isActive, gameId } = req.body || {};
   const resolvedGameId = resolveGameId(gameId ?? DEFAULT_GAME_ID);
 
@@ -389,6 +420,10 @@ app.put('/api/game/status', async (req, res) => {
   const game = await db.get('SELECT * FROM games WHERE id = ?', [resolvedGameId]);
   if (!game) {
     return res.status(404).json({ message: 'Game not found.' });
+  }
+
+  if (!(await userHasTeamAccess(currentUserId, game.team_id))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
   if (!isActive) {
@@ -419,6 +454,11 @@ app.put('/api/game/status', async (req, res) => {
 });
 
 app.put('/api/game/:gameId/status', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
   const { isActive } = req.body || {};
   const gameId = resolveGameId(req.params.gameId);
 
@@ -429,6 +469,10 @@ app.put('/api/game/:gameId/status', async (req, res) => {
   const game = await db.get('SELECT * FROM games WHERE id = ?', [gameId]);
   if (!game) {
     return res.status(404).json({ message: 'Game not found.' });
+  }
+
+  if (!(await userHasTeamAccess(currentUserId, game.team_id))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
   if (!isActive) {
@@ -581,9 +625,19 @@ app.put('/api/games/:gameId/archive', async (req, res) => {
 });
 
 app.get('/api/players', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
   const gameId = DEFAULT_GAME_ID;
   const includeArchived = req.query.includeArchived === 'true';
   const teamId = resolveTeamId(req.query.teamId ?? DEFAULT_TEAM_ID);
+
+  if (!(await userHasTeamAccess(currentUserId, teamId))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
   const players = await db.all(
     includeArchived
       ? 'SELECT * FROM players WHERE team_id = ? ORDER BY id ASC'
@@ -635,14 +689,38 @@ app.post('/api/players', async (req, res) => {
 });
 
 app.put('/api/players/unarchive', async (req, res) => {
-  await db.run('UPDATE players SET archive = 0 WHERE archive = 1');
-  return res.json({ updated: true });
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
+  const teamId = resolveTeamId(req.body?.teamId ?? DEFAULT_TEAM_ID);
+  if (!(await userHasTeamAccess(currentUserId, teamId))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
+  const result = await db.run('UPDATE players SET archive = 0 WHERE archive = 1 AND team_id = ?', [teamId]);
+  return res.json({ updated: result.changes });
 });
 
 app.put('/api/players/:id', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
   const playerId = Number(req.params.id);
   if (!Number.isFinite(playerId) || playerId <= 0) {
     return res.status(400).json({ message: 'A valid player ID is required.' });
+  }
+
+  const existingPlayer = await db.get('SELECT team_id FROM players WHERE id = ?', [playerId]);
+  if (!existingPlayer) {
+    return res.status(404).json({ message: 'Player not found.' });
+  }
+
+  if (!(await userHasTeamAccess(currentUserId, existingPlayer.team_id))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
   const { firstName, lastName, archive } = req.body || {};
@@ -814,7 +892,17 @@ app.post('/api/teams/join', async (req, res) => {
 });
 
 app.get('/api/teams/:teamId', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
   const teamId = resolveTeamId(req.params.teamId);
+
+  if (!(await userHasTeamAccess(currentUserId, teamId))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
   const team = await db.get('SELECT * FROM teams WHERE id = ?', [teamId]);
 
   if (!team) {
@@ -1152,7 +1240,9 @@ app.post('/api/register', async (req, res) => {
 
   return res.status(201).json({
     message: 'Registration successful. Check your email to verify your account before logging in.',
-    verificationUrl,
+    // Only echoed back outside production, where there's no real inbox to check — in
+    // production this would let anyone verify an email address they don't own.
+    ...(IS_PRODUCTION ? {} : { verificationUrl }),
     user: {
       id: user.id,
       firstName: user.first_name,

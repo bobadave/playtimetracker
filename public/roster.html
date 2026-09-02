@@ -308,7 +308,13 @@
       }
 
       async function unarchivePlayers() {
-        const response = await fetch('/api/players/unarchive', { method: 'PUT' });
+        const response = await fetch('/api/players/unarchive', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ teamId: state.currentTeamId })
+        });
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
           throw new Error(errorData.message || 'Unable to unarchive players.');

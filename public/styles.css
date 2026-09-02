@@ -952,12 +952,15 @@ h1 {
   color: var(--muted);
   cursor: grab;
   touch-action: none;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  transition: background 0.15s ease, color 0.15s ease;
+  background: #f5f8fc;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
 .drag-handle:hover {
   background: rgba(18, 32, 51, 0.06);
+  border-color: #b7c9ea;
   color: var(--ink);
 }
 
