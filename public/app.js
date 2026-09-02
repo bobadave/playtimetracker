@@ -101,16 +101,41 @@ function formatPercent(playerSeconds, totalSeconds) {
 
 const supportsTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
-function attachDragHandlers(element, playerId) {
-  element.dataset.playerId = String(playerId);
+const dragHandleHtml = `
+  <div class="drag-handle" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="5 9 2 12 5 15"></polyline>
+      <polyline points="9 5 12 2 15 5"></polyline>
+      <polyline points="15 19 12 22 9 19"></polyline>
+      <polyline points="19 9 22 12 19 15"></polyline>
+      <line x1="2" y1="12" x2="22" y2="12"></line>
+      <line x1="12" y1="2" x2="12" y2="22"></line>
+    </svg>
+  </div>
+`;
+
+function attachDragHandlers(card, playerId) {
+  card.dataset.playerId = String(playerId);
 
   if (supportsTouch) {
     return;
   }
 
-  element.addEventListener('dragstart', (event) => {
+  const handle = card.querySelector('.drag-handle');
+  if (!handle) {
+    return;
+  }
+
+  handle.draggable = true;
+  handle.addEventListener('dragstart', (event) => {
     event.dataTransfer.setData('text/plain', String(playerId));
     event.dataTransfer.effectAllowed = 'move';
+
+    const handleRect = handle.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    const offsetX = handleRect.left - cardRect.left + event.offsetX;
+    const offsetY = handleRect.top - cardRect.top + event.offsetY;
+    event.dataTransfer.setDragImage(card, offsetX, offsetY);
   });
 }
 
@@ -166,8 +191,8 @@ function renderPlayers(players) {
       if (uiClass) {
         stagePlayer.classList.add(uiClass);
       }
-      stagePlayer.draggable = !supportsTouch;
       stagePlayer.innerHTML = `
+        ${dragHandleHtml}
         <div class="player-meta">
           <span class="player-name">${escapeHtml(player.fullName)}</span>
           <span class="status-pill active">On field</span>
@@ -197,8 +222,8 @@ function renderPlayers(players) {
     if (uiClass) {
       playerCard.classList.add(uiClass);
     }
-    playerCard.draggable = !supportsTouch;
     playerCard.innerHTML = `
+      ${dragHandleHtml}
       <div class="player-meta">
         <span class="player-name">${escapeHtml(player.fullName)}</span>
         <span class="status-pill ${player.inStage ? 'active' : 'inactive'}">${player.inStage ? 'On field' : 'Bench'}</span>
@@ -409,7 +434,12 @@ function setupTouchDragAndDrop() {
   }
 
   document.addEventListener('touchstart', (event) => {
-    const card = event.target.closest('.player-card, .stage-player');
+    const handle = event.target.closest('.drag-handle');
+    if (!handle) {
+      return;
+    }
+
+    const card = handle.closest('.player-card, .stage-player');
     if (!card || !card.dataset.playerId) {
       return;
     }

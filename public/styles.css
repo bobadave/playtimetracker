@@ -312,6 +312,14 @@ button, input {
   margin-bottom: 10px;
 }
 
+.auth-logo {
+  display: block;
+  max-width: 260px;
+  width: 100%;
+  height: auto;
+  margin: 0 auto 20px;
+}
+
 .auth-form {
   display: flex;
   flex-direction: column;
@@ -931,9 +939,30 @@ h1 {
   border: 1px solid var(--line);
   border-radius: 14px;
   background: #ffffff;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  color: var(--muted);
   cursor: grab;
   touch-action: none;
-  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  border-radius: 8px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.drag-handle:hover {
+  background: rgba(18, 32, 51, 0.06);
+  color: var(--ink);
+}
+
+.drag-handle:active {
+  cursor: grabbing;
 }
 
 .drag-source-active {
