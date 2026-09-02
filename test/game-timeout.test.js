@@ -1,0 +1,263 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+// Point the app at an isolated, disposable database before requiring server.js,
+// so this suite never touches the real dev/prod database file.
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'playtimetracker-timeout-'));
+process.env.DB_PATH = path.join(tempDir, 'game_time_tracker.db');
+process.env.PORT = '0';
+process.env.NODE_ENV = 'test';
+
+const db = require('../src/db');
+const { startServer, isGameTimedOut, GAME_TIME_LIMIT_MS } = require('../src/server');
+
+let server;
+let baseUrl;
+
+test.before(async () => {
+  server = await startServer();
+  const { port } = server.address();
+  baseUrl = `http://localhost:${port}`;
+});
+
+test.after(async () => {
+  await new Promise((resolve) => server.close(resolve));
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+function extractSessionCookie(response) {
+  const setCookie = response.headers.get('set-cookie');
+  if (!setCookie) {
+    return null;
+  }
+  return setCookie.split(';')[0];
+}
+
+async function registerAndLogIn(label) {
+  const email = `${label}${Date.now()}${Math.random().toString(36).slice(2)}@example.com`;
+  const password = 'password123';
+
+  const regResponse = await fetch(`${baseUrl}/api/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ firstName: label, lastName: 'Tester', email, password })
+  });
+  const regJson = await regResponse.json();
+  assert.equal(regResponse.status, 201);
+
+  // verificationUrl is built from APP_BASE_URL, which was resolved before the
+  // OS assigned this test run's ephemeral port — rewrite it onto the real baseUrl.
+  const verificationPath = new URL(regJson.verificationUrl).pathname + new URL(regJson.verificationUrl).search;
+  await fetch(`${baseUrl}${verificationPath}`);
+
+  const loginResponse = await fetch(`${baseUrl}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  assert.equal(loginResponse.status, 200);
+  const cookie = extractSessionCookie(loginResponse);
+  assert.ok(cookie, 'login should set a session cookie');
+
+  return { email, cookie };
+}
+
+function authedFetch(cookie) {
+  return (urlPath, options = {}) => fetch(`${baseUrl}${urlPath}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: cookie,
+      ...(options.headers || {})
+    }
+  });
+}
+
+async function createTeam(fetchAs, label) {
+  const response = await fetchAs('/api/teams', {
+    method: 'POST',
+    body: JSON.stringify({ teamName: `${label} ${Date.now()}${Math.random().toString(36).slice(2)}` })
+  });
+  const { team } = await response.json();
+  return team;
+}
+
+async function createPlayer(fetchAs, teamId, firstName) {
+  const response = await fetchAs('/api/players', {
+    method: 'POST',
+    body: JSON.stringify({ firstName, lastName: 'P', teamId })
+  });
+  const { player } = await response.json();
+  return player;
+}
+
+async function createGame(fetchAs, teamId, location) {
+  const response = await fetchAs('/api/games', {
+    method: 'POST',
+    body: JSON.stringify({ location, date: '2026-09-06', team_id: teamId })
+  });
+  const { game } = await response.json();
+  return game;
+}
+
+function putOnField(fetchAs, playerId, gameId) {
+  return fetchAs('/api/segments', {
+    method: 'POST',
+    body: JSON.stringify({ playerId, inPlay: true, gameId })
+  });
+}
+
+async function rewindGameStartTime(gameId, msAgo) {
+  const timestamp = new Date(Date.now() - msAgo).toISOString();
+  await db.run('UPDATE games SET start_time = ? WHERE id = ?', [timestamp, gameId]);
+}
+
+test('isGameTimedOut is a pure function of start_time and the 1 hour limit', () => {
+  assert.equal(isGameTimedOut(null), false);
+  assert.equal(isGameTimedOut({ start_time: null }), false);
+  assert.equal(isGameTimedOut({ start_time: new Date().toISOString() }), false);
+  assert.equal(
+    isGameTimedOut({ start_time: new Date(Date.now() - (GAME_TIME_LIMIT_MS + 1000)).toISOString() }),
+    true
+  );
+});
+
+test('start_time lifecycle: null on creation, stamped by first player, unchanged by second', async () => {
+  const { cookie } = await registerAndLogIn('Lifecycle');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Lifecycle Team');
+  const [p1, p2] = await Promise.all([
+    createPlayer(fetchAs, team.id, 'P1'),
+    createPlayer(fetchAs, team.id, 'P2')
+  ]);
+  const game = await createGame(fetchAs, team.id, 'Lifecycle Field');
+
+  assert.equal(game.start_time, null);
+
+  const seg1 = await putOnField(fetchAs, p1.id, game.id);
+  assert.equal(seg1.status, 201);
+  const afterP1 = await (await fetchAs(`/api/game/${game.id}`)).json();
+  assert.ok(afterP1.game.start_time);
+  const firstStartTime = afterP1.game.start_time;
+
+  const seg2 = await putOnField(fetchAs, p2.id, game.id);
+  assert.equal(seg2.status, 201);
+  const afterP2 = await (await fetchAs(`/api/game/${game.id}`)).json();
+  assert.equal(afterP2.game.start_time, firstStartTime);
+});
+
+test('a game past the 1 hour limit auto-closes active players and cannot accept new players or be resumed', async () => {
+  const { cookie } = await registerAndLogIn('Timeout');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Timeout Team');
+  const [p1, p2] = await Promise.all([
+    createPlayer(fetchAs, team.id, 'P1'),
+    createPlayer(fetchAs, team.id, 'P2')
+  ]);
+  const game = await createGame(fetchAs, team.id, 'Timeout Field');
+
+  await putOnField(fetchAs, p1.id, game.id);
+  await putOnField(fetchAs, p2.id, game.id);
+
+  await rewindGameStartTime(game.id, GAME_TIME_LIMIT_MS + 60 * 60 * 1000);
+
+  const afterTimeout = await (await fetchAs(`/api/game/${game.id}`)).json();
+  assert.equal(Number(afterTimeout.game.is_active), 0);
+
+  const latestRowsPerPlayer = await db.all(
+    `SELECT in_play FROM player_activity pa
+     WHERE game_id = ? AND id = (
+       SELECT MAX(id) FROM player_activity WHERE game_id = pa.game_id AND player_id = pa.player_id
+     )`,
+    [game.id]
+  );
+  assert.ok(
+    latestRowsPerPlayer.every((row) => Number(row.in_play) === 0),
+    'every player\'s latest activity row should be a close-out (in_play = 0)'
+  );
+
+  const playersAfter = await (await fetchAs(`/api/players/${game.id}?teamId=${team.id}`)).json();
+  assert.ok(playersAfter.every((player) => player.inStage === false));
+
+  const rejoinResponse = await putOnField(fetchAs, p1.id, game.id);
+  assert.equal(rejoinResponse.status, 409);
+
+  const resumeResponse = await fetchAs(`/api/game/${game.id}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({ isActive: true })
+  });
+  assert.equal(resumeResponse.status, 409);
+});
+
+test('timing out one game does not affect a sibling game on the same team', async () => {
+  const { cookie } = await registerAndLogIn('SiblingIso');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Sibling Team');
+  const [p1, p2] = await Promise.all([
+    createPlayer(fetchAs, team.id, 'P1'),
+    createPlayer(fetchAs, team.id, 'P2')
+  ]);
+  const gameA = await createGame(fetchAs, team.id, 'Field A');
+  const gameB = await createGame(fetchAs, team.id, 'Field B');
+
+  await putOnField(fetchAs, p1.id, gameA.id);
+  await putOnField(fetchAs, p2.id, gameB.id);
+
+  await rewindGameStartTime(gameA.id, GAME_TIME_LIMIT_MS + 60 * 60 * 1000);
+
+  const gameAAfter = await (await fetchAs(`/api/game/${gameA.id}`)).json();
+  assert.equal(Number(gameAAfter.game.is_active), 0);
+
+  const gameBAfter = await (await fetchAs(`/api/game/${gameB.id}`)).json();
+  assert.equal(Number(gameBAfter.game.is_active), 1);
+
+  const playersInB = await (await fetchAs(`/api/players/${gameB.id}?teamId=${team.id}`)).json();
+  const p2InB = playersInB.find((player) => player.id === p2.id);
+  assert.equal(p2InB.inStage, true, 'player in the untouched sibling game must remain on the field');
+
+  const gameBActivity = await db.all('SELECT * FROM player_activity WHERE game_id = ? ORDER BY id', [gameB.id]);
+  assert.equal(gameBActivity.length, 1, 'no close-out row should have leaked into the sibling game');
+  assert.equal(Number(gameBActivity[0].in_play), 1);
+});
+
+test('timing out one team\'s game does not affect a different team\'s game or players', async () => {
+  const userA = await registerAndLogIn('TeamIsoA');
+  const userB = await registerAndLogIn('TeamIsoB');
+  const fetchAsA = authedFetch(userA.cookie);
+  const fetchAsB = authedFetch(userB.cookie);
+
+  const teamA = await createTeam(fetchAsA, 'Team A');
+  const teamB = await createTeam(fetchAsB, 'Team B');
+  const playerA = await createPlayer(fetchAsA, teamA.id, 'PlayerA');
+  const playerB = await createPlayer(fetchAsB, teamB.id, 'PlayerB');
+  const gameA = await createGame(fetchAsA, teamA.id, 'Team A Field');
+  const gameB = await createGame(fetchAsB, teamB.id, 'Team B Field');
+
+  await putOnField(fetchAsA, playerA.id, gameA.id);
+  await putOnField(fetchAsB, playerB.id, gameB.id);
+
+  await rewindGameStartTime(gameA.id, GAME_TIME_LIMIT_MS + 60 * 60 * 1000);
+
+  const gameAAfter = await (await fetchAsA(`/api/game/${gameA.id}`)).json();
+  assert.equal(Number(gameAAfter.game.is_active), 0);
+
+  const gameBAfter = await (await fetchAsB(`/api/game/${gameB.id}`)).json();
+  assert.equal(Number(gameBAfter.game.is_active), 1);
+
+  const playersInB = await (await fetchAsB(`/api/players/${gameB.id}?teamId=${teamB.id}`)).json();
+  const playerBStatus = playersInB.find((player) => player.id === playerB.id);
+  assert.equal(playerBStatus.inStage, true, 'player on a different team must remain unaffected');
+
+  const gameBActivity = await db.all('SELECT * FROM player_activity WHERE game_id = ? ORDER BY id', [gameB.id]);
+  assert.equal(gameBActivity.length, 1, 'no close-out row should have leaked across teams');
+  assert.equal(Number(gameBActivity[0].in_play), 1);
+
+  const resumeB = await fetchAsB(`/api/game/${gameB.id}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({ isActive: false })
+  });
+  assert.equal(resumeB.status, 200, 'the untouched team\'s game keeps its normal, non-timed-out lifecycle');
+});

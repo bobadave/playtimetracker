@@ -227,6 +227,26 @@ button, input {
   background: #0f6c56;
 }
 
+.game-toggle-btn.ended {
+  background: var(--red);
+  color: #ffffff;
+  cursor: not-allowed;
+  opacity: 0.85;
+  box-shadow: none;
+}
+
+.game-toggle-btn.ended:hover,
+.game-toggle-btn.ended:active {
+  transform: none;
+}
+
+.game-countdown {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e6949b;
+  font-variant-numeric: tabular-nums;
+}
+
 .game-form-panel {
   margin-bottom: 22px;
   padding: 18px 20px;

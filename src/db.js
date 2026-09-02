@@ -3,7 +3,7 @@ const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 
 const dataDir = path.join(__dirname, '..', 'data');
-const dbPath = path.join(dataDir, 'game_time_tracker.db');
+const dbPath = process.env.DB_PATH || path.join(dataDir, 'game_time_tracker.db');
 
 function createDbApi(databasePath = dbPath) {
   const targetDir = path.dirname(databasePath);
@@ -75,7 +75,8 @@ function createDbApi(databasePath = dbPath) {
         location TEXT,
         date TEXT,
         is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
-        archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))
+        archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
+        start_time TEXT
       )
     `);
 
@@ -143,6 +144,7 @@ function createDbApi(databasePath = dbPath) {
     await ensureColumn('games', 'is_active', 'is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))');
     await ensureColumn('games', 'team_id', 'team_id INTEGER NOT NULL DEFAULT 1 REFERENCES teams(id)');
     await ensureColumn('games', 'archived', 'archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))');
+    await ensureColumn('games', 'start_time', 'start_time TEXT');
 
     await ensureColumn('teams', 'team_name', 'team_name TEXT NOT NULL');
     await ensureColumn('teams', 'user_admin_id', 'user_admin_id INTEGER');

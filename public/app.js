@@ -5,8 +5,34 @@ const gameNameDisplayEl = document.getElementById('game-name-display');
 const teamNameDisplayEl = document.getElementById('team-name-display');
 const gameMetaDisplayEl = document.getElementById('game-meta-display');
 const gameToggleBtn = document.getElementById('game-toggle-btn');
+const gameCountdownEl = document.getElementById('game-countdown');
 const gameFormEl = document.getElementById('game-form');
 let isGameActive = true;
+let isGameTimedOut = false;
+const GAME_TIME_LIMIT_MS = 60 * 60 * 1000;
+let gameStartTimeMs = null;
+let countdownIntervalId = null;
+
+function formatCountdown(remainingMs) {
+  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function updateCountdownDisplay() {
+  if (!Number.isFinite(gameStartTimeMs)) {
+    return;
+  }
+
+  const remainingMs = gameStartTimeMs + GAME_TIME_LIMIT_MS - Date.now();
+  gameCountdownEl.textContent = formatCountdown(remainingMs);
+
+  if (remainingMs <= 0 && countdownIntervalId) {
+    clearInterval(countdownIntervalId);
+    countdownIntervalId = null;
+  }
+}
 
 function getCurrentGameId() {
   const match = window.location.pathname.match(/\/t\d+\/games\/(\d+)/) || window.location.pathname.match(/\/games\/(\d+)/);
@@ -151,11 +177,40 @@ function renderGameHeader(game) {
   gameIdDisplayEl.textContent = `Game ID: ${gameId}`;
   gameMetaDisplayEl.textContent = `Location: ${location} • ${date}`;
   isGameActive = !!(game && Number(game.is_active) !== 0);
-  gameToggleBtn.textContent = isGameActive ? 'Game End' : 'Game Resume';
-  gameToggleBtn.classList.toggle('resume', !isGameActive);
-  gameToggleBtn.setAttribute('aria-pressed', String(!isGameActive));
-  stageEl.classList.toggle('disabled', !isGameActive);
-  stageEl.setAttribute('aria-disabled', String(!isGameActive));
+
+  const startTimeMs = game && game.start_time ? new Date(game.start_time).getTime() : null;
+  isGameTimedOut = Number.isFinite(startTimeMs) && Date.now() - startTimeMs > GAME_TIME_LIMIT_MS;
+
+  if (isGameTimedOut) {
+    gameToggleBtn.textContent = 'Game Ended';
+    gameToggleBtn.disabled = true;
+    gameToggleBtn.classList.remove('resume');
+    gameToggleBtn.classList.add('ended');
+    gameToggleBtn.setAttribute('aria-pressed', 'true');
+  } else {
+    gameToggleBtn.disabled = false;
+    gameToggleBtn.classList.remove('ended');
+    gameToggleBtn.textContent = isGameActive ? 'Game End' : 'Game Resume';
+    gameToggleBtn.classList.toggle('resume', !isGameActive);
+    gameToggleBtn.setAttribute('aria-pressed', String(!isGameActive));
+  }
+
+  stageEl.classList.toggle('disabled', !isGameActive || isGameTimedOut);
+  stageEl.setAttribute('aria-disabled', String(!isGameActive || isGameTimedOut));
+
+  const shouldShowCountdown = isGameActive && !isGameTimedOut && Number.isFinite(startTimeMs);
+  gameStartTimeMs = shouldShowCountdown ? startTimeMs : null;
+  gameCountdownEl.hidden = !shouldShowCountdown;
+
+  if (shouldShowCountdown) {
+    updateCountdownDisplay();
+    if (!countdownIntervalId) {
+      countdownIntervalId = setInterval(updateCountdownDisplay, 1000);
+    }
+  } else if (countdownIntervalId) {
+    clearInterval(countdownIntervalId);
+    countdownIntervalId = null;
+  }
 }
 
 function renderPlayers(players) {
@@ -177,9 +232,11 @@ function renderPlayers(players) {
 
   if (activePlayers.length === 0) {
     stageEl.classList.add('is-empty');
-    const emptyMessage = isGameActive
-      ? 'Drop players on to field to track play time.'
-      : 'Resume game to bring players on to field.';
+    const emptyMessage = isGameTimedOut
+      ? 'This game has ended.'
+      : isGameActive
+        ? 'Drop players on to field to track play time.'
+        : 'Resume game to bring players on to field.';
     stageEl.innerHTML = `<div class="empty-state">${emptyMessage}</div>`;
   } else {
     stageEl.classList.remove('is-empty');

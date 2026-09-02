@@ -171,6 +171,49 @@ function resolveTeamId(teamId) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TEAM_ID;
 }
 
+const GAME_TIME_LIMIT_MS = 60 * 60 * 1000;
+
+async function closeOutActivePlayers(gameId) {
+  const activePlayers = await db.all(
+    'SELECT DISTINCT player_id FROM player_activity WHERE game_id = ? AND in_play = 1',
+    [gameId]
+  );
+
+  for (const { player_id } of activePlayers) {
+    const lastActivity = await db.get(
+      'SELECT * FROM player_activity WHERE game_id = ? AND player_id = ? ORDER BY id DESC LIMIT 1',
+      [gameId, player_id]
+    );
+
+    if (lastActivity && Number(lastActivity.in_play) === 1) {
+      await db.run(
+        'INSERT INTO player_activity (game_id, player_id, in_play, timestamp) VALUES (?, ?, ?, ?)',
+        [gameId, player_id, 0, new Date().toISOString()]
+      );
+    }
+  }
+}
+
+function isGameTimedOut(game) {
+  if (!game || !game.start_time) {
+    return false;
+  }
+
+  const startMs = new Date(game.start_time).getTime();
+  return Number.isFinite(startMs) && Date.now() - startMs > GAME_TIME_LIMIT_MS;
+}
+
+async function enforceGameTimeLimit(game) {
+  if (!game || Number(game.is_active) !== 1 || !isGameTimedOut(game)) {
+    return game;
+  }
+
+  await closeOutActivePlayers(game.id);
+  await db.run('UPDATE games SET is_active = 0 WHERE id = ?', [game.id]);
+
+  return { ...game, is_active: 0 };
+}
+
 function summarizeActivityRows(rows, now = Date.now()) {
   let totalMs = 0;
   let activeStart = null;
@@ -308,7 +351,8 @@ app.get('/api/game/:gameId', async (req, res) => {
     return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
-  res.json({ game });
+  const enforcedGame = await enforceGameTimeLimit(game);
+  res.json({ game: enforcedGame });
 });
 
 app.get('/api/games', async (req, res) => {
@@ -426,25 +470,12 @@ app.put('/api/game/status', async (req, res) => {
     return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
+  if (isActive && isGameTimedOut(game)) {
+    return res.status(409).json({ message: 'This game has already ended and cannot be resumed.' });
+  }
+
   if (!isActive) {
-    const activePlayers = await db.all(
-      'SELECT DISTINCT player_id FROM player_activity WHERE game_id = ? AND in_play = 1',
-      [resolvedGameId]
-    );
-
-    for (const { player_id } of activePlayers) {
-      const lastActivity = await db.get(
-        'SELECT * FROM player_activity WHERE game_id = ? AND player_id = ? ORDER BY id DESC LIMIT 1',
-        [resolvedGameId, player_id]
-      );
-
-      if (lastActivity && Number(lastActivity.in_play) === 1) {
-        await db.run(
-          'INSERT INTO player_activity (game_id, player_id, in_play, timestamp) VALUES (?, ?, ?, ?)',
-          [resolvedGameId, player_id, 0, new Date().toISOString()]
-        );
-      }
-    }
+    await closeOutActivePlayers(resolvedGameId);
   }
 
   await db.run('UPDATE games SET is_active = ? WHERE id = ?', [isActive ? 1 : 0, resolvedGameId]);
@@ -475,25 +506,12 @@ app.put('/api/game/:gameId/status', async (req, res) => {
     return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
+  if (isActive && isGameTimedOut(game)) {
+    return res.status(409).json({ message: 'This game has already ended and cannot be resumed.' });
+  }
+
   if (!isActive) {
-    const activePlayers = await db.all(
-      'SELECT DISTINCT player_id FROM player_activity WHERE game_id = ? AND in_play = 1',
-      [gameId]
-    );
-
-    for (const { player_id } of activePlayers) {
-      const lastActivity = await db.get(
-        'SELECT * FROM player_activity WHERE game_id = ? AND player_id = ? ORDER BY id DESC LIMIT 1',
-        [gameId, player_id]
-      );
-
-      if (lastActivity && Number(lastActivity.in_play) === 1) {
-        await db.run(
-          'INSERT INTO player_activity (game_id, player_id, in_play, timestamp) VALUES (?, ?, ?, ?)',
-          [gameId, player_id, 0, new Date().toISOString()]
-        );
-      }
-    }
+    await closeOutActivePlayers(gameId);
   }
 
   await db.run('UPDATE games SET is_active = ? WHERE id = ?', [isActive ? 1 : 0, gameId]);
@@ -771,6 +789,9 @@ app.get('/api/players/:gameId', async (req, res) => {
     return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
+  const game = await db.get('SELECT * FROM games WHERE id = ?', [gameId]);
+  await enforceGameTimeLimit(game);
+
   const players = await db.all('SELECT * FROM players WHERE team_id = ? AND archive = 0 ORDER BY id ASC', [teamId]);
 
   const gameSummaryMap = await getActivitySummaryMap(gameId);
@@ -1019,6 +1040,11 @@ app.get('/api/stage/:gameId', async (req, res) => {
 });
 
 app.post('/api/segments', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
   const { playerId, inPlay, gameId } = req.body;
 
   if (!playerId || typeof inPlay !== 'boolean') {
@@ -1029,6 +1055,21 @@ app.post('/api/segments', async (req, res) => {
   const playerExists = await db.get('SELECT id FROM players WHERE id = ? AND archive = 0', [playerId]);
   if (!playerExists) {
     return res.status(404).json({ message: 'Player not found or archived.' });
+  }
+
+  let game = await db.get('SELECT * FROM games WHERE id = ?', [resolvedGameId]);
+  if (!game) {
+    return res.status(404).json({ message: 'Game not found.' });
+  }
+
+  if (!(await userHasTeamAccess(currentUserId, game.team_id))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
+  game = await enforceGameTimeLimit(game);
+
+  if (inPlay && Number(game.is_active) !== 1) {
+    return res.status(409).json({ message: 'This game has ended and can no longer accept players.' });
   }
 
   const lastActivity = await db.get(
@@ -1045,6 +1086,11 @@ app.post('/api/segments', async (req, res) => {
   }
 
   const timestamp = new Date().toISOString();
+
+  if (inPlay && !game.start_time) {
+    await db.run('UPDATE games SET start_time = ? WHERE id = ?', [timestamp, resolvedGameId]);
+  }
+
   const result = await db.run(
     'INSERT INTO player_activity (game_id, player_id, in_play, timestamp) VALUES (?, ?, ?, ?)',
     [resolvedGameId, playerId, inPlay ? 1 : 0, timestamp]
@@ -1492,5 +1538,7 @@ module.exports = {
   getCumulativePlayerSeconds,
   getActivitySummaryMap,
   getCumulativeSummaryMap,
-  startServer
+  startServer,
+  isGameTimedOut,
+  GAME_TIME_LIMIT_MS
 };
