@@ -110,9 +110,22 @@ function putOnField(fetchAs, playerId, gameId) {
   });
 }
 
+// Shifts a game's start_time AND every existing player_activity row for that game
+// back by the same delta, so the whole session (clock-ins included) is consistently
+// simulated as having happened `msAgo` in the past — not just the start_time column.
 async function rewindGameStartTime(gameId, msAgo) {
-  const timestamp = new Date(Date.now() - msAgo).toISOString();
-  await db.run('UPDATE games SET start_time = ? WHERE id = ?', [timestamp, gameId]);
+  const game = await db.get('SELECT start_time FROM games WHERE id = ?', [gameId]);
+  const currentStartMs = new Date(game.start_time).getTime();
+  const newStartMs = Date.now() - msAgo;
+  const deltaMs = newStartMs - currentStartMs;
+
+  const rows = await db.all('SELECT id, timestamp FROM player_activity WHERE game_id = ?', [gameId]);
+  for (const row of rows) {
+    const shifted = new Date(new Date(row.timestamp).getTime() + deltaMs).toISOString();
+    await db.run('UPDATE player_activity SET timestamp = ? WHERE id = ?', [shifted, row.id]);
+  }
+
+  await db.run('UPDATE games SET start_time = ? WHERE id = ?', [new Date(newStartMs).toISOString(), gameId]);
 }
 
 test('isGameTimedOut is a pure function of start_time and the 1 hour limit', () => {
@@ -190,6 +203,32 @@ test('a game past the 1 hour limit auto-closes active players and cannot accept 
     body: JSON.stringify({ isActive: true })
   });
   assert.equal(resumeResponse.status, 409);
+});
+
+test('recorded play time is capped at the timeout boundary, even when enforcement runs long after it', async () => {
+  const { cookie } = await registerAndLogIn('CapCheck');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Cap Check Team');
+  const player = await createPlayer(fetchAs, team.id, 'Capped');
+  const game = await createGame(fetchAs, team.id, 'Cap Check Field');
+
+  await putOnField(fetchAs, player.id, game.id);
+
+  // Push start_time so far into the past that "now" (when enforcement runs below)
+  // is many hours past the 1 hour boundary — simulating nobody loading the page
+  // for a long stretch after the game should have already ended.
+  const farPastMs = GAME_TIME_LIMIT_MS + 20 * 60 * 60 * 1000;
+  await rewindGameStartTime(game.id, farPastMs);
+
+  await fetchAs(`/api/game/${game.id}`); // triggers enforcement
+
+  const playersAfter = await (await fetchAs(`/api/players/${game.id}?teamId=${team.id}`)).json();
+  const capped = playersAfter.find((p) => p.id === player.id);
+
+  // Recorded time must never exceed the game's 1 hour limit, regardless of how
+  // late enforcement actually ran.
+  assert.ok(capped.totalSeconds <= GAME_TIME_LIMIT_MS / 1000);
+  assert.ok(capped.totalSeconds > GAME_TIME_LIMIT_MS / 1000 - 5, 'should be close to the full hour, not near-zero');
 });
 
 test('timing out one game does not affect a sibling game on the same team', async () => {
