@@ -9,8 +9,10 @@ const {
   createTeam,
   createPlayer,
   createGame,
-  putOnField
+  putOnField,
+  rewindGameStartTime
 } = require('./helpers');
+const { GAME_TIME_LIMIT_MS } = require('../src/server');
 
 test.before(async () => {
   await startTestServer();
@@ -95,6 +97,32 @@ test('the games list is scoped to the caller\'s teams and the archived filter wo
 
   const outsiderUnscoped = await (await outsiderFetch('/api/games')).json();
   assert.ok(!outsiderUnscoped.games.map((g) => g.id).includes(activeGame.id), 'a user with no teams in common must not see another team\'s games');
+});
+
+test('the games list reflects a timed-out game as ended even if nobody has loaded that game\'s own page yet', async () => {
+  // Regression test: GET /api/games used to return whatever is_active happened to
+  // already be stored in the database, without applying the same 1-hour timeout
+  // enforcement that GET /api/game/:gameId and GET /api/players/:gameId apply.
+  // A game could time out and still show as "Active" in the Game History list
+  // until someone specifically opened that game's own page.
+  const { cookie } = await registerAndLogIn('GamesListTimeoutOwner');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Games List Timeout Team');
+  const player = await createPlayer(fetchAs, team.id, 'Timeout', 'Player');
+  const game = await createGame(fetchAs, team.id, 'Timeout Field');
+
+  await putOnField(fetchAs, player.id, game.id);
+  await rewindGameStartTime(game.id, GAME_TIME_LIMIT_MS + 60 * 60 * 1000);
+
+  // Deliberately go straight to the list endpoint — never touch /api/game/:gameId
+  // or /api/players/:gameId, which is what previously masked this bug.
+  const listResponse = await (await fetchAs(`/api/games?teamId=${team.id}`)).json();
+  const listedGame = listResponse.games.find((g) => g.id === game.id);
+  assert.equal(Number(listedGame.is_active), 0, 'a timed-out game must show as ended in the games list, not still active');
+
+  // The underlying player should also have been closed out as a side effect.
+  const players = await (await fetchAs(`/api/players/${game.id}?teamId=${team.id}`)).json();
+  assert.equal(players.find((p) => p.id === player.id).inStage, false);
 });
 
 test('editing a game validates its fields, requires team access, and closing it out via edit ends active players\' segments', async () => {

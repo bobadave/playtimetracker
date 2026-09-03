@@ -402,7 +402,15 @@ app.get('/api/games', async (req, res) => {
     params
   );
 
-  return res.json({ games });
+  // A game can time out without anyone ever loading its individual page (which is
+  // otherwise what triggers enforcement) — apply the same check here so the list
+  // never shows a timed-out game as still "Active".
+  const enforcedGames = [];
+  for (const game of games) {
+    enforcedGames.push(await enforceGameTimeLimit(game));
+  }
+
+  return res.json({ games: enforcedGames });
 });
 
 app.post('/api/games', async (req, res) => {

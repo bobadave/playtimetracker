@@ -10,7 +10,8 @@ const {
   createTeam,
   createPlayer,
   createGame,
-  putOnField
+  putOnField,
+  rewindGameStartTime
 } = require('./helpers');
 // Requiring '../src/server' again here reuses the module already cached (and
 // pointed at the isolated test database) by helpers.js above.
@@ -23,24 +24,6 @@ test.before(async () => {
 test.after(async () => {
   await stopTestServer();
 });
-
-// Shifts a game's start_time AND every existing player_activity row for that game
-// back by the same delta, so the whole session (clock-ins included) is consistently
-// simulated as having happened `msAgo` in the past — not just the start_time column.
-async function rewindGameStartTime(gameId, msAgo) {
-  const game = await db.get('SELECT start_time FROM games WHERE id = ?', [gameId]);
-  const currentStartMs = new Date(game.start_time).getTime();
-  const newStartMs = Date.now() - msAgo;
-  const deltaMs = newStartMs - currentStartMs;
-
-  const rows = await db.all('SELECT id, timestamp FROM player_activity WHERE game_id = ?', [gameId]);
-  for (const row of rows) {
-    const shifted = new Date(new Date(row.timestamp).getTime() + deltaMs).toISOString();
-    await db.run('UPDATE player_activity SET timestamp = ? WHERE id = ?', [shifted, row.id]);
-  }
-
-  await db.run('UPDATE games SET start_time = ? WHERE id = ?', [new Date(newStartMs).toISOString(), gameId]);
-}
 
 test('isGameTimedOut is a pure function of start_time and the 1 hour limit', () => {
   assert.equal(isGameTimedOut(null), false);

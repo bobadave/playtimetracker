@@ -36,20 +36,7 @@
           <p>No games yet for this team. Create a new game to get started.</p>
           <a id="empty-games-create-link" href="/t1/new-game" class="primary-btn">Create New Game</a>
         </div>
-        <div class="table-scroll">
-        <table id="games-table" class="data-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Location</th>
-              <th>Date</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="games-body"></tbody>
-        </table>
-        </div>
+        <div id="games-list" class="game-list"></div>
         <div class="game-history-footer">
           <button id="unarchive-games-btn" type="button" class="secondary-btn hidden">Unarchive Archived Games</button>
         </div>
@@ -60,6 +47,7 @@
     <script>
       let currentGames = [];
       let editingGameId = null;
+      const expandedGameIds = new Set();
 
       function getCurrentTeamId() {
         const match = window.location.pathname.match(/^\/t(\d+)\/games$/);
@@ -79,48 +67,84 @@
         const teamId = getCurrentTeamId();
         const href = `/t${teamId}/games/${game.id}`;
         const isActive = Number(game.is_active) === 1;
+        const editing = editingGameId === game.id;
+        const expanded = editing || expandedGameIds.has(game.id);
 
-        if (editingGameId === game.id) {
-          return `
-            <tr data-game-id="${game.id}">
-              <td><input type="text" class="edit-name" value="${escapeHtml(game.name || '')}" /></td>
-              <td><input type="text" class="edit-location" value="${escapeHtml(game.location || '')}" /></td>
-              <td><input type="date" class="edit-date" value="${escapeHtml(game.date || '')}" /></td>
-              <td>
-                <select class="edit-status">
-                  <option value="true" ${isActive ? 'selected' : ''}>Active</option>
-                  <option value="false" ${!isActive ? 'selected' : ''}>Ended</option>
-                </select>
-              </td>
-              <td class="row-actions">
-                <button type="button" class="secondary-btn small-btn" data-action="cancel" data-game-id="${game.id}">Cancel</button>
-                <button type="button" class="danger-btn small-btn" data-action="archive" data-game-id="${game.id}">Archive</button>
-                <button type="button" class="primary-btn small-btn" data-action="update" data-game-id="${game.id}">Update</button>
-              </td>
-            </tr>
+        const detailsContent = editing
+          ? `
+            <div class="field-group">
+              <label for="edit-game-name-${game.id}">Name</label>
+              <input id="edit-game-name-${game.id}" type="text" class="inline-input edit-name" value="${escapeHtml(game.name || '')}" />
+            </div>
+            <div class="field-group">
+              <label for="edit-game-location-${game.id}">Location</label>
+              <input id="edit-game-location-${game.id}" type="text" class="inline-input edit-location" value="${escapeHtml(game.location || '')}" />
+            </div>
+            <div class="field-group">
+              <label for="edit-game-date-${game.id}">Date</label>
+              <input id="edit-game-date-${game.id}" type="date" class="inline-input edit-date" value="${escapeHtml(game.date || '')}" />
+            </div>
+            <div class="field-group">
+              <label for="edit-game-status-${game.id}">Status</label>
+              <select id="edit-game-status-${game.id}" class="inline-input edit-status">
+                <option value="true" ${isActive ? 'selected' : ''}>Active</option>
+                <option value="false" ${!isActive ? 'selected' : ''}>Ended</option>
+              </select>
+            </div>
+            <div class="row-actions">
+              <button type="button" class="secondary-btn small-btn" data-action="cancel" data-game-id="${game.id}">Cancel</button>
+              <button type="button" class="danger-btn small-btn" data-action="archive" data-game-id="${game.id}">Archive</button>
+              <button type="button" class="primary-btn small-btn" data-action="update" data-game-id="${game.id}">Update</button>
+            </div>
+          `
+          : `
+            <div class="game-row-info">
+              <div class="game-row-info-item"><span class="game-row-info-label">Location</span><span>${escapeHtml(game.location || 'TBD')}</span></div>
+              <div class="game-row-info-item"><span class="game-row-info-label">Date</span><span>${escapeHtml(game.date || 'TBD')}</span></div>
+              <div class="game-row-info-item"><span class="game-row-info-label">Status</span><span>${isActive ? 'Active' : 'Ended'}</span></div>
+            </div>
+            <div class="row-actions">
+              <button type="button" class="secondary-btn small-btn" data-action="edit" data-game-id="${game.id}">Edit</button>
+            </div>
           `;
-        }
 
         return `
-          <tr data-game-id="${game.id}">
-            <td><a href="${href}">${escapeHtml(game.name || '')}</a></td>
-            <td>${escapeHtml(game.location || 'TBD')}</td>
-            <td>${escapeHtml(game.date || 'TBD')}</td>
-            <td>${isActive ? 'Active' : 'Ended'}</td>
-            <td class="row-actions">
-              <button type="button" class="secondary-btn small-btn" data-action="edit" data-game-id="${game.id}">Edit</button>
-            </td>
-          </tr>
+          <div class="game-row" data-game-id="${game.id}" data-expanded="${expanded}">
+            <div class="game-row-summary">
+              <button type="button" class="game-row-name-btn" data-action="toggle" data-game-id="${game.id}" aria-expanded="${expanded}">
+                <span class="game-row-name">${escapeHtml(game.name || '')}</span>
+              </button>
+              <div class="game-row-summary-actions">
+                <span class="game-status-badge ${isActive ? 'game-status-badge--active' : 'game-status-badge--ended'}">${isActive ? 'Active' : 'Ended'}</span>
+                <a href="${href}" class="primary-btn small-btn">View Game</a>
+                <button type="button" class="game-row-toggle" data-action="toggle" data-game-id="${game.id}" aria-expanded="${expanded}" aria-label="Show more details">
+                  <span class="game-row-chevron" aria-hidden="true">⌄</span>
+                </button>
+              </div>
+            </div>
+            <div class="game-row-details">
+              <div class="game-row-details-inner">
+              ${detailsContent}
+              </div>
+            </div>
+          </div>
         `;
       }
 
       function renderGamesTable() {
-        const tbody = document.getElementById('games-body');
-        tbody.innerHTML = currentGames.map(renderGameRow).join('');
+        const list = document.getElementById('games-list');
+        const sortedGames = [...currentGames].sort((a, b) => {
+          const dateCompare = String(b.date || '').localeCompare(String(a.date || ''));
+          if (dateCompare !== 0) {
+            return dateCompare;
+          }
+          return Number(b.id) - Number(a.id);
+        });
+        list.innerHTML = sortedGames.map(renderGameRow).join('');
       }
 
       async function updateGame(gameId) {
-        const row = document.querySelector(`tr[data-game-id="${gameId}"]`);
+        const row = document.querySelector(`.game-row[data-game-id="${gameId}"]`);
         const name = row.querySelector('.edit-name').value.trim();
         const location = row.querySelector('.edit-location').value.trim();
         const date = row.querySelector('.edit-date').value;
@@ -210,7 +234,7 @@
         await refreshUnarchiveButton();
       }
 
-      document.getElementById('games-body').addEventListener('click', (event) => {
+      function handleGamesListClick(event) {
         const button = event.target.closest('button[data-action]');
         if (!button) {
           return;
@@ -219,8 +243,19 @@
         const gameId = Number(button.dataset.gameId);
         const { action } = button.dataset;
 
-        if (action === 'edit') {
+        if (action === 'toggle') {
+          if (expandedGameIds.has(gameId)) {
+            expandedGameIds.delete(gameId);
+            if (editingGameId === gameId) {
+              editingGameId = null;
+            }
+          } else {
+            expandedGameIds.add(gameId);
+          }
+          renderGamesTable();
+        } else if (action === 'edit') {
           editingGameId = gameId;
+          expandedGameIds.add(gameId);
           renderGamesTable();
         } else if (action === 'cancel') {
           editingGameId = null;
@@ -230,7 +265,7 @@
         } else if (action === 'archive') {
           archiveGame(gameId);
         }
-      });
+      }
 
       async function loadGames() {
         const teamId = getCurrentTeamId();
@@ -263,19 +298,19 @@
         }
 
         const { games } = await response.json();
-        const table = document.getElementById('games-table');
+        const list = document.getElementById('games-list');
         const emptyState = document.getElementById('games-empty-state');
 
         currentGames = games;
 
         if (games.length === 0) {
-          document.getElementById('games-body').innerHTML = '';
-          table.classList.add('hidden');
+          list.innerHTML = '';
+          list.classList.add('hidden');
           emptyState.classList.remove('hidden');
           return;
         }
 
-        table.classList.remove('hidden');
+        list.classList.remove('hidden');
         emptyState.classList.add('hidden');
         renderGamesTable();
       }
@@ -284,6 +319,7 @@
         initMenu();
         updateTeamScopedMenuLinks();
         document.getElementById('unarchive-games-btn').addEventListener('click', unarchiveGames);
+        document.getElementById('games-list').addEventListener('click', handleGamesListClick);
         loadGames().catch((error) => {
           console.error(error);
         });

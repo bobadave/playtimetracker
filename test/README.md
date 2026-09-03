@@ -38,6 +38,10 @@ Every test file except `db-and-utils.test.js` follows the same shape:
    `putOnField`/`takeOffField`) so every test file exercises the same
    register → verify → log in → create team → create player → create game →
    clock in/out flow a real user would, rather than seeding rows directly.
+   It also exposes `rewindGameStartTime(gameId, msAgo)`, which shifts a
+   game's `start_time` and all of its `player_activity` rows back by the
+   same delta — used wherever a test needs to simulate a game having timed
+   out without actually waiting an hour.
 5. Nothing is manually cleaned up between tests — each file's database is
    thrown away (`fs.rmSync`) in `test.after`, and within a file, tests create
    their own uniquely-named users/teams/players/games so they don't collide.
@@ -127,6 +131,15 @@ bugs — none of which a mocked unit test would have caught.
   `closeOutActivePlayers` helper as everything else.)
 - Archiving/unarchiving a single game, and bulk-unarchiving a team's archived
   games without touching another team's archived games.
+- **Timeout-status regression test**: the games list (`GET /api/games`)
+  reflects a timed-out game as ended even when nobody has ever loaded that
+  game's own page. `GET /api/game/:gameId` and `GET /api/players/:gameId`
+  both apply timeout enforcement before responding, but the list endpoint
+  originally just returned whatever `is_active` was already stored — so a
+  game could time out and still show "Active" in Game History until someone
+  happened to open it directly. The test creates a game, times it out via
+  `rewindGameStartTime`, and asserts against the list endpoint only, never
+  touching the individual game's endpoints, to make sure this can't regress.
 
 ### 6. Player clock-in/clock-out segments — `segments.test.js`
 - `POST /api/segments` requires authentication and validates `playerId` /
@@ -208,6 +221,16 @@ before shipping.
   system themes, and general CSS regressions are not covered — there's no
   visual regression tooling in this project. Manually check in a real mobile
   browser after CSS/layout changes.
+- **Client-side-only logic.** This suite talks to the API, not a browser, so
+  any behavior implemented purely in `public/*.html`/`public/*.js` with no
+  server round-trip is untested. On the Game History page specifically:
+  sorting games by date descending, the collapsed/expanded row toggle
+  (mirroring the My Teams page's pattern), and the Active/Ended status badge
+  shown on the collapsed row are all client-side rendering with no
+  corresponding `node:test` coverage. These were verified manually with
+  Playwright during development but are not part of `npm test` — a
+  regression here would only be caught by manual testing or by adding a
+  browser-driven suite (e.g. Playwright) alongside this one.
 - **Cross-browser behavior.** The suite talks to the Express API directly; it
   never loads a page in an actual browser engine, so client-side JS bugs
   (rendering, event wiring, `fetch` polyfill gaps) in Safari/Firefox/older
