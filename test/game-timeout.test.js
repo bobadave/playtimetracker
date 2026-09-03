@@ -1,114 +1,28 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
 
-// Point the app at an isolated, disposable database before requiring server.js,
-// so this suite never touches the real dev/prod database file.
-const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'playtimetracker-timeout-'));
-process.env.DB_PATH = path.join(tempDir, 'game_time_tracker.db');
-process.env.PORT = '0';
-process.env.NODE_ENV = 'test';
-
-const db = require('../src/db');
-const { startServer, isGameTimedOut, GAME_TIME_LIMIT_MS } = require('../src/server');
-
-let server;
-let baseUrl;
+const {
+  db,
+  startTestServer,
+  stopTestServer,
+  registerAndLogIn,
+  authedFetch,
+  createTeam,
+  createPlayer,
+  createGame,
+  putOnField
+} = require('./helpers');
+// Requiring '../src/server' again here reuses the module already cached (and
+// pointed at the isolated test database) by helpers.js above.
+const { isGameTimedOut, GAME_TIME_LIMIT_MS } = require('../src/server');
 
 test.before(async () => {
-  server = await startServer();
-  const { port } = server.address();
-  baseUrl = `http://localhost:${port}`;
+  await startTestServer();
 });
 
 test.after(async () => {
-  await new Promise((resolve) => server.close(resolve));
-  fs.rmSync(tempDir, { recursive: true, force: true });
+  await stopTestServer();
 });
-
-function extractSessionCookie(response) {
-  const setCookie = response.headers.get('set-cookie');
-  if (!setCookie) {
-    return null;
-  }
-  return setCookie.split(';')[0];
-}
-
-async function registerAndLogIn(label) {
-  const email = `${label}${Date.now()}${Math.random().toString(36).slice(2)}@example.com`;
-  const password = 'password123';
-
-  const regResponse = await fetch(`${baseUrl}/api/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ firstName: label, lastName: 'Tester', email, password })
-  });
-  const regJson = await regResponse.json();
-  assert.equal(regResponse.status, 201);
-
-  // verificationUrl is built from APP_BASE_URL, which was resolved before the
-  // OS assigned this test run's ephemeral port — rewrite it onto the real baseUrl.
-  const verificationPath = new URL(regJson.verificationUrl).pathname + new URL(regJson.verificationUrl).search;
-  await fetch(`${baseUrl}${verificationPath}`);
-
-  const loginResponse = await fetch(`${baseUrl}/api/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password })
-  });
-  assert.equal(loginResponse.status, 200);
-  const cookie = extractSessionCookie(loginResponse);
-  assert.ok(cookie, 'login should set a session cookie');
-
-  return { email, cookie };
-}
-
-function authedFetch(cookie) {
-  return (urlPath, options = {}) => fetch(`${baseUrl}${urlPath}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Cookie: cookie,
-      ...(options.headers || {})
-    }
-  });
-}
-
-async function createTeam(fetchAs, label) {
-  const response = await fetchAs('/api/teams', {
-    method: 'POST',
-    body: JSON.stringify({ teamName: `${label} ${Date.now()}${Math.random().toString(36).slice(2)}` })
-  });
-  const { team } = await response.json();
-  return team;
-}
-
-async function createPlayer(fetchAs, teamId, firstName) {
-  const response = await fetchAs('/api/players', {
-    method: 'POST',
-    body: JSON.stringify({ firstName, lastName: 'P', teamId })
-  });
-  const { player } = await response.json();
-  return player;
-}
-
-async function createGame(fetchAs, teamId, location) {
-  const response = await fetchAs('/api/games', {
-    method: 'POST',
-    body: JSON.stringify({ location, date: '2026-09-06', team_id: teamId })
-  });
-  const { game } = await response.json();
-  return game;
-}
-
-function putOnField(fetchAs, playerId, gameId) {
-  return fetchAs('/api/segments', {
-    method: 'POST',
-    body: JSON.stringify({ playerId, inPlay: true, gameId })
-  });
-}
 
 // Shifts a game's start_time AND every existing player_activity row for that game
 // back by the same delta, so the whole session (clock-ins included) is consistently

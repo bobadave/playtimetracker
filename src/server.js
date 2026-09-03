@@ -582,24 +582,7 @@ app.put('/api/games/:gameId', async (req, res) => {
   }
 
   if (!isActive) {
-    const activePlayers = await db.all(
-      'SELECT DISTINCT player_id FROM player_activity WHERE game_id = ? AND in_play = 1',
-      [gameId]
-    );
-
-    for (const { player_id } of activePlayers) {
-      const lastActivity = await db.get(
-        'SELECT * FROM player_activity WHERE game_id = ? AND player_id = ? ORDER BY id DESC LIMIT 1',
-        [gameId, player_id]
-      );
-
-      if (lastActivity && Number(lastActivity.in_play) === 1) {
-        await db.run(
-          'INSERT INTO player_activity (game_id, player_id, in_play, timestamp) VALUES (?, ?, ?, ?)',
-          [gameId, player_id, 0, new Date().toISOString()]
-        );
-      }
-    }
+    await closeOutActivePlayers(gameId, game);
   }
 
   await db.run(
@@ -695,6 +678,11 @@ app.get('/api/players', async (req, res) => {
 });
 
 app.post('/api/players', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
   const { firstName, lastName, teamId } = req.body || {};
   const trimmedFirst = String(firstName ?? '').trim();
   const trimmedLast = String(lastName ?? '').trim();
@@ -702,6 +690,10 @@ app.post('/api/players', async (req, res) => {
 
   if (!trimmedFirst || !trimmedLast) {
     return res.status(400).json({ message: 'First name and last name are required.' });
+  }
+
+  if (!(await userHasTeamAccess(currentUserId, resolvedTeamId))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
   const result = await db.run(
