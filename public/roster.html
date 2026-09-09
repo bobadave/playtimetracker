@@ -42,6 +42,13 @@
           </div>
         </section>
 
+        <section class="roster-chart-card">
+          <div class="chart-header">
+            <h2>All-time Goals</h2>
+          </div>
+          <div id="roster-goal-chart" class="goal-chart" aria-label="Player all-time goals scored"></div>
+        </section>
+
         <div class="table-scroll">
         <table id="roster-table" class="data-table data-table--fit">
           <thead>
@@ -121,7 +128,19 @@
         return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
       }
 
-      function renderRosterChart(players) {
+      const CHART_PALETTE = ['#768db0', '#74a57f', '#c7ae62', '#ba7f7f', '#7f9bb8', '#8c8eb8', '#c4976d', '#8ba37d'];
+
+      // Assigns each visible (non-archived) player a stable color by their position in the
+      // roster, so the same player always gets the same color across every chart on the page —
+      // regardless of the order any individual chart happens to sort or list them in.
+      function getPlayerColorMap(players) {
+        const visiblePlayers = players.filter((player) => !player.archive);
+        return Object.fromEntries(
+          visiblePlayers.map((player, index) => [player.id, CHART_PALETTE[index % CHART_PALETTE.length]])
+        );
+      }
+
+      function renderRosterChart(players, colorMap) {
         const chartEl = document.getElementById('roster-pie-chart');
         const legendEl = document.getElementById('roster-chart-legend');
         const visiblePlayers = players.filter((player) => !player.archive);
@@ -133,13 +152,12 @@
           return;
         }
 
-        const palette = ['#768db0', '#74a57f', '#c7ae62', '#ba7f7f', '#7f9bb8', '#8c8eb8', '#c4976d', '#8ba37d'];
         let start = 0;
-        const segments = visiblePlayers.map((player, index) => {
+        const segments = visiblePlayers.map((player) => {
           const value = Number(player.cumulativeSeconds) || 0;
           const share = value / totalSeconds;
           const end = start + share;
-          const color = palette[index % palette.length];
+          const color = colorMap[player.id];
           const segment = `${color} ${start * 100}% ${end * 100}%`;
           start = end;
           return segment;
@@ -147,19 +165,49 @@
 
         chartEl.style.background = `conic-gradient(${segments.join(', ')})`;
         legendEl.innerHTML = visiblePlayers
-          .map((player, index) => {
+          .map((player) => {
             const value = Number(player.cumulativeSeconds) || 0;
             const share = totalSeconds > 0 ? (value / totalSeconds) * 100 : 0;
             const playerName = `${player.firstName} ${player.lastName}`.trim();
             return `
               <li class="chart-item">
-                <span class="chart-swatch" style="background:${palette[index % palette.length]};"></span>
+                <span class="chart-swatch" style="background:${colorMap[player.id]};"></span>
                 <span class="chart-label">${escapeHtml(playerName)}</span>
                 <span class="chart-value">${share.toFixed(1)}%</span>
               </li>
             `;
           })
           .join('');
+      }
+
+      function renderGoalChart(players, colorMap) {
+        const chartEl = document.getElementById('roster-goal-chart');
+        const visiblePlayers = players.filter((player) => !player.archive);
+        const maxGoals = visiblePlayers.reduce((max, player) => Math.max(max, Number(player.cumulativeGoals) || 0), 0);
+
+        if (!visiblePlayers.length || maxGoals <= 0) {
+          chartEl.innerHTML = '<p class="chart-empty">No goals recorded yet.</p>';
+          return;
+        }
+
+        const sortedPlayers = [...visiblePlayers].sort((a, b) => (Number(b.cumulativeGoals) || 0) - (Number(a.cumulativeGoals) || 0));
+
+        chartEl.innerHTML = sortedPlayers.map((player) => {
+          const goals = Number(player.cumulativeGoals) || 0;
+          const widthPercent = (goals / maxGoals) * 100;
+          const playerName = `${player.firstName} ${player.lastName}`.trim();
+          const color = colorMap[player.id];
+
+          return `
+            <div class="goal-bar-row">
+              <span class="goal-bar-label">${escapeHtml(playerName)}</span>
+              <div class="goal-bar-track">
+                <div class="goal-bar-fill" style="width: ${widthPercent}%; background: ${color};"></div>
+              </div>
+              <span class="goal-bar-value">${goals}</span>
+            </div>
+          `;
+        }).join('');
       }
 
       function renderTeamName(teamName) {
@@ -236,7 +284,9 @@
 
         state.archivedCount = archivedPlayers.length;
         unarchiveBtn.classList.toggle('hidden', archivedPlayers.length === 0);
-        renderRosterChart(players);
+        const colorMap = getPlayerColorMap(players);
+        renderRosterChart(players, colorMap);
+        renderGoalChart(players, colorMap);
         updateSortIndicators();
 
         tbody.innerHTML = visiblePlayers.map((player) => {

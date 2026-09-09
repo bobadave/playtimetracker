@@ -1,10 +1,14 @@
 const playerListEl = document.getElementById('player-list');
 const stageEl = document.getElementById('stage');
+const scoreboardEl = document.getElementById('scoreboard');
+const goalPopupEl = document.getElementById('goal-popup');
+let goalPopupTimeoutId = null;
 const gameIdDisplayEl = document.getElementById('game-id-display');
 const gameNameDisplayEl = document.getElementById('game-name-display');
 const teamNameDisplayEl = document.getElementById('team-name-display');
 const gameMetaDisplayEl = document.getElementById('game-meta-display');
 const gameToggleBtn = document.getElementById('game-toggle-btn');
+const gameCountdownWrapEl = document.getElementById('game-countdown-wrap');
 const gameCountdownEl = document.getElementById('game-countdown');
 const gameFormEl = document.getElementById('game-form');
 let isGameActive = true;
@@ -200,7 +204,7 @@ function renderGameHeader(game) {
 
   const shouldShowCountdown = isGameActive && !isGameTimedOut && Number.isFinite(startTimeMs);
   gameStartTimeMs = shouldShowCountdown ? startTimeMs : null;
-  gameCountdownEl.hidden = !shouldShowCountdown;
+  gameCountdownWrapEl.hidden = !shouldShowCountdown;
 
   if (shouldShowCountdown) {
     updateCountdownDisplay();
@@ -211,6 +215,34 @@ function renderGameHeader(game) {
     clearInterval(countdownIntervalId);
     countdownIntervalId = null;
   }
+}
+
+function showGoalPopup() {
+  if (goalPopupTimeoutId) {
+    clearTimeout(goalPopupTimeoutId);
+  }
+
+  goalPopupEl.classList.add('visible');
+  goalPopupTimeoutId = setTimeout(() => {
+    goalPopupEl.classList.remove('visible');
+    goalPopupTimeoutId = null;
+  }, 3000);
+}
+
+function renderScoreboard(players) {
+  const scorers = players.filter((player) => Number(player.goals) > 0);
+
+  if (scorers.length === 0) {
+    scoreboardEl.classList.add('hidden');
+    scoreboardEl.innerHTML = '';
+    return;
+  }
+
+  scoreboardEl.classList.remove('hidden');
+  const scorerPills = scorers
+    .map((player) => `<span class="scorer-pill">${escapeHtml(player.fullName)} <span class="scorer-count">${player.goals}</span></span>`)
+    .join('');
+  scoreboardEl.innerHTML = `<span class="scoreboard-label">Goals</span>${scorerPills}`;
 }
 
 function renderPlayers(players) {
@@ -228,16 +260,19 @@ function renderPlayers(players) {
   });
   const totalGameSeconds = players.reduce((sum, player) => sum + (Number(player.totalSeconds) || 0), 0);
 
+  renderScoreboard(players);
+
   stageEl.innerHTML = '';
 
   if (activePlayers.length === 0) {
     stageEl.classList.add('is-empty');
+    const isPaused = !isGameTimedOut && !isGameActive;
     const emptyMessage = isGameTimedOut
       ? 'This game has ended.'
       : isGameActive
         ? 'Drop players on to field to track play time.'
         : 'Resume game to bring players on to field.';
-    stageEl.innerHTML = `<div class="empty-state">${emptyMessage}</div>`;
+    stageEl.innerHTML = `<div class="empty-state${isPaused ? ' empty-state-paused' : ''}">${emptyMessage}</div>`;
   } else {
     stageEl.classList.remove('is-empty');
 
@@ -254,6 +289,7 @@ function renderPlayers(players) {
           <span class="player-name">${escapeHtml(player.fullName)}</span>
           <span class="status-pill active">On field</span>
         </div>
+        <button type="button" class="goal-btn" ${isGameActive ? '' : 'disabled'}>Goal</button>
         <div class="time-box">
           <div class="metric-group">
             <span class="time-label">Share</span>
@@ -320,6 +356,28 @@ async function logPlayerActivity(playerId, inPlay) {
     alert(errorData.message || 'Unable to update player activity.');
     return;
   }
+
+  const updatedPlayers = await fetchPlayers();
+  renderPlayers(updatedPlayers);
+}
+
+async function logGoal(playerId) {
+  const gameId = getCurrentGameId();
+  const response = await fetch('/api/player-actions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ playerId, gameId, action: 'goal' })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    alert(errorData.message || 'Unable to record the goal.');
+    return;
+  }
+
+  showGoalPopup();
 
   const updatedPlayers = await fetchPlayers();
   renderPlayers(updatedPlayers);
@@ -422,6 +480,19 @@ function setupDropZones() {
     const playerId = Number(event.dataTransfer.getData('text/plain'));
     if (!Number.isNaN(playerId)) {
       logPlayerActivity(playerId, false);
+    }
+  });
+
+  stageEl.addEventListener('click', (event) => {
+    const goalBtn = event.target.closest('.goal-btn');
+    if (!goalBtn || goalBtn.disabled) {
+      return;
+    }
+
+    const card = goalBtn.closest('.stage-player');
+    const playerId = Number(card?.dataset.playerId);
+    if (Number.isFinite(playerId)) {
+      logGoal(playerId);
     }
   });
 

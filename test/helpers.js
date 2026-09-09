@@ -141,6 +141,13 @@ function takeOffField(fetchAs, playerId, gameId) {
   });
 }
 
+function logGoal(fetchAs, playerId, gameId) {
+  return fetchAs('/api/player-actions', {
+    method: 'POST',
+    body: JSON.stringify({ playerId, gameId, action: 'goal' })
+  });
+}
+
 // Shifts a game's start_time AND every existing player_activity row for that game
 // back by the same delta, so the whole session (clock-ins included) is consistently
 // simulated as having happened `msAgo` in the past — not just the start_time column.
@@ -173,5 +180,6 @@ module.exports = {
   createGame,
   putOnField,
   takeOffField,
+  logGoal,
   rewindGameStartTime
 };

@@ -139,6 +139,18 @@ function createDbApi(databasePath = dbPath) {
       )
     `);
 
+    await run(`
+      CREATE TABLE IF NOT EXISTS player_action (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_id INTEGER NOT NULL,
+        player_id INTEGER NOT NULL,
+        action TEXT NOT NULL CHECK (action IN ('goal')),
+        timestamp TEXT NOT NULL,
+        FOREIGN KEY (game_id) REFERENCES games(id),
+        FOREIGN KEY (player_id) REFERENCES players(id)
+      )
+    `);
+
     await ensureColumn('games', 'location', 'location TEXT');
     await ensureColumn('games', 'date', 'date TEXT');
     await ensureColumn('games', 'is_active', 'is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))');

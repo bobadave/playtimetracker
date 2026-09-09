@@ -303,6 +303,30 @@ async function getActivitySummaryMap(gameId) {
   );
 }
 
+const PLAYER_ACTION_TYPES = new Set(['goal']);
+
+async function getGoalCountMap(gameId) {
+  const resolvedGameId = resolveGameId(gameId);
+  const rows = await db.all(
+    "SELECT player_id, COUNT(*) AS total FROM player_action WHERE game_id = ? AND action = 'goal' GROUP BY player_id",
+    [resolvedGameId]
+  );
+
+  return Object.fromEntries(rows.map((row) => [String(row.player_id), Number(row.total)]));
+}
+
+async function getCumulativeGoalMap() {
+  const rows = await db.all(`
+    SELECT pa.player_id, COUNT(*) AS total
+    FROM player_action pa
+    INNER JOIN games g ON g.id = pa.game_id
+    WHERE pa.action = 'goal' AND g.archived = 0
+    GROUP BY pa.player_id
+  `);
+
+  return Object.fromEntries(rows.map((row) => [String(row.player_id), Number(row.total)]));
+}
+
 async function getCumulativeSummaryMap() {
   const rows = await db.all(`
     SELECT pa.* FROM player_activity pa
@@ -663,10 +687,12 @@ app.get('/api/players', async (req, res) => {
 
   const gameSummaryMap = await getActivitySummaryMap(gameId);
   const cumulativeMap = await getCumulativeSummaryMap();
+  const cumulativeGoalMap = await getCumulativeGoalMap();
 
   const payload = players.map((player) => {
     const summary = gameSummaryMap[String(player.id)] || { totalSeconds: 0, isInStage: false };
     const cumulativeSeconds = cumulativeMap[String(player.id)] || 0;
+    const cumulativeGoals = cumulativeGoalMap[String(player.id)] || 0;
 
     return {
       id: player.id,
@@ -677,6 +703,7 @@ app.get('/api/players', async (req, res) => {
       inStage: summary.isInStage,
       totalSeconds: summary.totalSeconds,
       cumulativeSeconds,
+      cumulativeGoals,
       totalMinutes: summary.totalSeconds / 60,
       cumulativeMinutes: cumulativeSeconds / 60
     };
@@ -802,6 +829,7 @@ app.get('/api/players/:gameId', async (req, res) => {
   const players = await db.all('SELECT * FROM players WHERE team_id = ? AND archive = 0 ORDER BY id ASC', [teamId]);
 
   const gameSummaryMap = await getActivitySummaryMap(gameId);
+  const goalCountMap = await getGoalCountMap(gameId);
 
   const payload = players.map((player) => {
     const summary = gameSummaryMap[String(player.id)] || { totalSeconds: 0, isInStage: false };
@@ -814,7 +842,8 @@ app.get('/api/players/:gameId', async (req, res) => {
       fullName: `${player.first_name} ${player.last_name}`,
       inStage: summary.isInStage,
       totalSeconds: summary.totalSeconds,
-      totalMinutes: summary.totalSeconds / 60
+      totalMinutes: summary.totalSeconds / 60,
+      goals: goalCountMap[String(player.id)] || 0
     };
   });
 
@@ -1114,6 +1143,70 @@ app.post('/api/segments', async (req, res) => {
   const summary = await getPlayerSummary(playerId, resolvedGameId);
 
   return res.status(201).json({ segment, summary });
+});
+
+app.post('/api/player-actions', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
+  const { playerId, gameId, action } = req.body || {};
+  const resolvedPlayerId = Number(playerId);
+
+  if (!Number.isFinite(resolvedPlayerId) || resolvedPlayerId <= 0) {
+    return res.status(400).json({ message: 'A valid playerId is required.' });
+  }
+
+  if (!PLAYER_ACTION_TYPES.has(action)) {
+    return res.status(400).json({ message: 'A valid action is required.' });
+  }
+
+  const resolvedGameId = resolveGameId(gameId);
+  const player = await db.get('SELECT * FROM players WHERE id = ? AND archive = 0', [resolvedPlayerId]);
+  if (!player) {
+    return res.status(404).json({ message: 'Player not found or archived.' });
+  }
+
+  const game = await db.get('SELECT * FROM games WHERE id = ?', [resolvedGameId]);
+  if (!game) {
+    return res.status(404).json({ message: 'Game not found.' });
+  }
+
+  if (!(await userHasTeamAccess(currentUserId, game.team_id))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
+  const lastActivity = await db.get(
+    'SELECT * FROM player_activity WHERE game_id = ? AND player_id = ? ORDER BY id DESC LIMIT 1',
+    [resolvedGameId, resolvedPlayerId]
+  );
+
+  if (!lastActivity || Number(lastActivity.in_play) !== 1) {
+    return res.status(409).json({ message: 'Player must be on the field to log this action.' });
+  }
+
+  const timestamp = new Date().toISOString();
+  const result = await db.run(
+    'INSERT INTO player_action (game_id, player_id, action, timestamp) VALUES (?, ?, ?, ?)',
+    [resolvedGameId, resolvedPlayerId, action, timestamp]
+  );
+
+  const goalCountRow = await db.get(
+    "SELECT COUNT(*) AS total FROM player_action WHERE game_id = ? AND player_id = ? AND action = 'goal'",
+    [resolvedGameId, resolvedPlayerId]
+  );
+
+  return res.status(201).json({
+    playerAction: {
+      id: result.id,
+      gameId: resolvedGameId,
+      playerId: resolvedPlayerId,
+      action,
+      timestamp
+    },
+    goalCount: Number(goalCountRow.total)
+  });
 });
 
 app.get('/api/session', async (req, res) => {
@@ -1545,6 +1638,7 @@ module.exports = {
   getCumulativePlayerSeconds,
   getActivitySummaryMap,
   getCumulativeSummaryMap,
+  getGoalCountMap,
   startServer,
   isGameTimedOut,
   GAME_TIME_LIMIT_MS
