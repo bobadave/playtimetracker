@@ -11,7 +11,8 @@ const {
   createGame,
   putOnField,
   takeOffField,
-  logGoal
+  logGoal,
+  removeLastGoal
 } = require('./helpers');
 
 test.before(async () => {
@@ -145,4 +146,96 @@ test('a goal scored in one game does not show up when viewing another game', asy
 
   const playersInGameB = await (await fetchAs(`/api/players/${gameB.id}?teamId=${team.id}`)).json();
   assert.equal(playersInGameB.find((p) => p.id === scorer.id).goals, 0, "gameB's view should not see gameA's goals");
+});
+
+test('DELETE /api/player-actions requires authentication, a valid playerId, and a recognized action', async () => {
+  const unauthed = await authedFetch(null)('/api/player-actions?playerId=1&gameId=1&action=goal', {
+    method: 'DELETE'
+  });
+  assert.equal(unauthed.status, 401);
+
+  const { cookie } = await registerAndLogIn('RemoveGoalValidation');
+  const fetchAs = authedFetch(cookie);
+
+  const missingPlayerId = await fetchAs('/api/player-actions?gameId=1&action=goal', { method: 'DELETE' });
+  assert.equal(missingPlayerId.status, 400);
+
+  const unrecognizedAction = await fetchAs('/api/player-actions?playerId=1&gameId=1&action=assist', { method: 'DELETE' });
+  assert.equal(unrecognizedAction.status, 400);
+});
+
+test('removing a goal for an unknown or archived player, or a game the caller lacks access to, is rejected', async () => {
+  const owner = await registerAndLogIn('RemoveGoalOwner');
+  const outsider = await registerAndLogIn('RemoveGoalOutsider');
+  const ownerFetch = authedFetch(owner.cookie);
+  const outsiderFetch = authedFetch(outsider.cookie);
+  const team = await createTeam(ownerFetch, 'Remove Goal Team');
+  const player = await createPlayer(ownerFetch, team.id, 'Player', 'One');
+  const game = await createGame(ownerFetch, team.id, 'Field');
+  await putOnField(ownerFetch, player.id, game.id);
+  await logGoal(ownerFetch, player.id, game.id);
+
+  const unknownPlayer = await removeLastGoal(ownerFetch, 999999, game.id);
+  assert.equal(unknownPlayer.status, 404);
+
+  const noAccessGame = await removeLastGoal(outsiderFetch, player.id, game.id);
+  assert.equal(noAccessGame.status, 403);
+
+  await ownerFetch(`/api/players/${player.id}`, { method: 'PUT', body: JSON.stringify({ archive: true }) });
+  const archivedPlayer = await removeLastGoal(ownerFetch, player.id, game.id);
+  assert.equal(archivedPlayer.status, 404);
+});
+
+test('removing a goal with none recorded returns 404, and repeated removals decrement then run out', async () => {
+  const { cookie } = await registerAndLogIn('RemoveGoalCount');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Remove Goal Count Team');
+  const player = await createPlayer(fetchAs, team.id, 'Scorer', 'Three');
+  const game = await createGame(fetchAs, team.id, 'Field');
+  await putOnField(fetchAs, player.id, game.id);
+
+  const removeWithNone = await removeLastGoal(fetchAs, player.id, game.id);
+  assert.equal(removeWithNone.status, 404);
+
+  await logGoal(fetchAs, player.id, game.id);
+  await logGoal(fetchAs, player.id, game.id);
+
+  const firstRemoval = await removeLastGoal(fetchAs, player.id, game.id);
+  const firstRemovalJson = await firstRemoval.json();
+  assert.equal(firstRemoval.status, 200);
+  assert.equal(firstRemovalJson.goalCount, 1);
+
+  const secondRemoval = await removeLastGoal(fetchAs, player.id, game.id);
+  const secondRemovalJson = await secondRemoval.json();
+  assert.equal(secondRemovalJson.goalCount, 0);
+
+  const thirdRemoval = await removeLastGoal(fetchAs, player.id, game.id);
+  assert.equal(thirdRemoval.status, 404, 'nothing left to remove once the count reaches zero');
+
+  const players = await (await fetchAs(`/api/players/${game.id}?teamId=${team.id}`)).json();
+  assert.equal(players.find((p) => p.id === player.id).goals, 0);
+});
+
+test('removing a goal only affects the targeted game, leaving other games untouched', async () => {
+  const { cookie } = await registerAndLogIn('RemoveGoalCrossGame');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Remove Goal Cross Game Team');
+  const player = await createPlayer(fetchAs, team.id, 'Scorer', 'Four');
+  const gameA = await createGame(fetchAs, team.id, 'Field A');
+  const gameB = await createGame(fetchAs, team.id, 'Field B');
+
+  await putOnField(fetchAs, player.id, gameA.id);
+  await logGoal(fetchAs, player.id, gameA.id);
+
+  await putOnField(fetchAs, player.id, gameB.id);
+  await logGoal(fetchAs, player.id, gameB.id);
+  await logGoal(fetchAs, player.id, gameB.id);
+
+  await removeLastGoal(fetchAs, player.id, gameB.id);
+
+  const playersInGameA = await (await fetchAs(`/api/players/${gameA.id}?teamId=${team.id}`)).json();
+  assert.equal(playersInGameA.find((p) => p.id === player.id).goals, 1, "removing from gameB shouldn't touch gameA");
+
+  const playersInGameB = await (await fetchAs(`/api/players/${gameB.id}?teamId=${team.id}`)).json();
+  assert.equal(playersInGameB.find((p) => p.id === player.id).goals, 1);
 });

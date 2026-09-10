@@ -1430,41 +1430,110 @@ h1 {
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
+  border: none;
   border-radius: 999px;
   background: rgba(240, 180, 41, 0.16);
   color: var(--ink);
   font-size: 13px;
   font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.scorer-pill:hover {
+  background: rgba(240, 180, 41, 0.3);
+  transform: translateY(-1px);
 }
 
 .scorer-pill .scorer-count {
   color: var(--green-dark);
 }
 
-.goal-popup {
+.popup-overlay {
   position: fixed;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%) scale(0.9);
   z-index: 1000;
-  padding: 24px 40px;
   border-radius: 18px;
   background: rgba(18, 32, 51, 0.92);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.popup-overlay.visible {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.goal-popup {
+  padding: 24px 40px;
   color: var(--gold);
   font-size: clamp(2rem, 8vw, 4rem);
   font-weight: 900;
   letter-spacing: 0.03em;
   text-align: center;
   text-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
-  opacity: 0;
-  pointer-events: none;
   transition: opacity 0.6s ease, transform 0.6s ease;
 }
 
-.goal-popup.visible {
-  opacity: 1;
-  transform: translate(-50%, -50%) scale(1);
+.confirm-popup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 28px 32px;
+  max-width: min(90vw, 360px);
+}
+
+.confirm-popup.visible {
+  pointer-events: auto;
+}
+
+.confirm-popup-message {
+  margin: 0;
+  color: #ffffff;
+  font-size: 1.15rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.confirm-popup-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.confirm-btn {
+  padding: 8px 24px;
+  border: none;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.confirm-btn:hover {
+  transform: translateY(-1px);
+}
+
+.confirm-btn:active {
+  transform: translateY(0);
+}
+
+.confirm-yes {
+  background: var(--green);
+  color: #ffffff;
+}
+
+.confirm-no {
+  background: var(--red);
+  color: #ffffff;
 }
 
 @media (max-width: 780px) {

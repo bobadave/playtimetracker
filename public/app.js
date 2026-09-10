@@ -3,6 +3,11 @@ const stageEl = document.getElementById('stage');
 const scoreboardEl = document.getElementById('scoreboard');
 const goalPopupEl = document.getElementById('goal-popup');
 let goalPopupTimeoutId = null;
+const confirmPopupEl = document.getElementById('confirm-popup');
+const confirmPopupMessageEl = document.getElementById('confirm-popup-message');
+const confirmPopupYesBtn = document.getElementById('confirm-popup-yes');
+const confirmPopupNoBtn = document.getElementById('confirm-popup-no');
+let confirmPopupResolver = null;
 const gameIdDisplayEl = document.getElementById('game-id-display');
 const gameNameDisplayEl = document.getElementById('game-name-display');
 const teamNameDisplayEl = document.getElementById('team-name-display');
@@ -229,6 +234,23 @@ function showGoalPopup() {
   }, 3000);
 }
 
+function showConfirmPopup(message) {
+  return new Promise((resolve) => {
+    confirmPopupResolver = resolve;
+    confirmPopupMessageEl.textContent = message;
+    confirmPopupEl.classList.add('visible');
+  });
+}
+
+function resolveConfirmPopup(result) {
+  confirmPopupEl.classList.remove('visible');
+  const resolve = confirmPopupResolver;
+  confirmPopupResolver = null;
+  if (resolve) {
+    resolve(result);
+  }
+}
+
 function renderScoreboard(players) {
   const scorers = players.filter((player) => Number(player.goals) > 0);
 
@@ -240,7 +262,7 @@ function renderScoreboard(players) {
 
   scoreboardEl.classList.remove('hidden');
   const scorerPills = scorers
-    .map((player) => `<span class="scorer-pill">${escapeHtml(player.fullName)} <span class="scorer-count">${player.goals}</span></span>`)
+    .map((player) => `<button type="button" class="scorer-pill" data-player-id="${player.id}" data-player-name="${escapeHtml(player.fullName)}">${escapeHtml(player.fullName)} <span class="scorer-count">${player.goals}</span></button>`)
     .join('');
   scoreboardEl.innerHTML = `<span class="scoreboard-label">Goals</span>${scorerPills}`;
 }
@@ -383,6 +405,40 @@ async function logGoal(playerId) {
   renderPlayers(updatedPlayers);
 }
 
+async function handleGoalButtonClick(playerId, playerName) {
+  const confirmed = await showConfirmPopup(`Confirm goal for ${playerName}`);
+  if (!confirmed) {
+    return;
+  }
+
+  await logGoal(playerId);
+}
+
+async function removeLastGoal(playerId) {
+  const gameId = getCurrentGameId();
+  const response = await fetch(`/api/player-actions?playerId=${playerId}&gameId=${gameId}&action=goal`, {
+    method: 'DELETE'
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    alert(errorData.message || 'Unable to remove the goal.');
+    return;
+  }
+
+  const updatedPlayers = await fetchPlayers();
+  renderPlayers(updatedPlayers);
+}
+
+async function handleRemoveGoalClick(playerId, playerName) {
+  const confirmed = await showConfirmPopup(`Remove last goal for ${playerName}?`);
+  if (!confirmed) {
+    return;
+  }
+
+  await removeLastGoal(playerId);
+}
+
 async function toggleGameStatus() {
   const nextState = !isGameActive;
   const gameId = getCurrentGameId();
@@ -491,10 +547,27 @@ function setupDropZones() {
 
     const card = goalBtn.closest('.stage-player');
     const playerId = Number(card?.dataset.playerId);
+    const playerName = card?.querySelector('.player-name')?.textContent || 'this player';
     if (Number.isFinite(playerId)) {
-      logGoal(playerId);
+      handleGoalButtonClick(playerId, playerName);
     }
   });
+
+  scoreboardEl.addEventListener('click', (event) => {
+    const pill = event.target.closest('.scorer-pill');
+    if (!pill) {
+      return;
+    }
+
+    const playerId = Number(pill.dataset.playerId);
+    const playerName = pill.dataset.playerName || 'this player';
+    if (Number.isFinite(playerId)) {
+      handleRemoveGoalClick(playerId, playerName);
+    }
+  });
+
+  confirmPopupYesBtn.addEventListener('click', () => resolveConfirmPopup(true));
+  confirmPopupNoBtn.addEventListener('click', () => resolveConfirmPopup(false));
 
   gameToggleBtn.addEventListener('click', toggleGameStatus);
   if (gameFormEl) {

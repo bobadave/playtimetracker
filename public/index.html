@@ -61,7 +61,15 @@
       </main>
     </div>
 
-    <div id="goal-popup" class="goal-popup" aria-live="assertive">GOOOOAAALL!!!</div>
+    <div id="goal-popup" class="popup-overlay goal-popup" aria-live="assertive">GOOOOAAALL!!!</div>
+
+    <div id="confirm-popup" class="popup-overlay confirm-popup" role="alertdialog" aria-modal="true" aria-live="assertive">
+      <p id="confirm-popup-message" class="confirm-popup-message"></p>
+      <div class="confirm-popup-actions">
+        <button type="button" id="confirm-popup-yes" class="confirm-btn confirm-yes">Yes</button>
+        <button type="button" id="confirm-popup-no" class="confirm-btn confirm-no">No</button>
+      </div>
+    </div>
 
     <script src="/styles.js"></script>
     <script src="/app.js"></script>

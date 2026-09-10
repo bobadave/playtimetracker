@@ -148,6 +148,12 @@ function logGoal(fetchAs, playerId, gameId) {
   });
 }
 
+function removeLastGoal(fetchAs, playerId, gameId) {
+  return fetchAs(`/api/player-actions?playerId=${playerId}&gameId=${gameId}&action=goal`, {
+    method: 'DELETE'
+  });
+}
+
 // Shifts a game's start_time AND every existing player_activity row for that game
 // back by the same delta, so the whole session (clock-ins included) is consistently
 // simulated as having happened `msAgo` in the past — not just the start_time column.
@@ -181,5 +187,6 @@ module.exports = {
   putOnField,
   takeOffField,
   logGoal,
+  removeLastGoal,
   rewindGameStartTime
 };
