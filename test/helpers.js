@@ -115,6 +115,11 @@ async function createPlayer(fetchAs, teamId, firstName, lastName = 'P') {
   return player;
 }
 
+// Games are created paused (see the "Game Start" feature — src/routes/games.js).
+// Most tests want a ready-to-use active game to exercise segment/goal/timeout
+// behavior against, so this activates it before returning. Tests that specifically
+// care about the paused-at-creation behavior create the game via a raw POST
+// instead of this helper (see games.test.js).
 async function createGame(fetchAs, teamId, location, date = '2026-09-06') {
   const response = await fetchAs('/api/games', {
     method: 'POST',
@@ -124,7 +129,16 @@ async function createGame(fetchAs, teamId, location, date = '2026-09-06') {
     throw new Error(`createGame failed (${response.status})`);
   }
   const { game } = await response.json();
-  return game;
+
+  const activateResponse = await fetchAs(`/api/game/${game.id}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({ isActive: true })
+  });
+  if (activateResponse.status !== 200) {
+    throw new Error(`createGame: failed to activate game (${activateResponse.status})`);
+  }
+  const { game: activatedGame } = await activateResponse.json();
+  return activatedGame;
 }
 
 function putOnField(fetchAs, playerId, gameId) {

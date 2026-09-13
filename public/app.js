@@ -18,6 +18,10 @@ const gameCountdownEl = document.getElementById('game-countdown');
 const gameFormEl = document.getElementById('game-form');
 let isGameActive = true;
 let isGameTimedOut = false;
+let gameHasStarted = false;
+let latestPlayers = [];
+let lastPlayersFetchMs = Date.now();
+let pausedFieldPlayerIds = new Set();
 const GAME_TIME_LIMIT_MS = 60 * 60 * 1000;
 let gameStartTimeMs = null;
 let countdownIntervalId = null;
@@ -134,6 +138,45 @@ function formatPercent(playerSeconds, totalSeconds) {
   return `${getSharePercentage(playerSeconds, totalSeconds).toFixed(1)}%`;
 }
 
+// The server only recomputes totalSeconds when we poll it (every 10s). Between polls we
+// extrapolate on-field players' elapsed time locally so the displayed clock ticks every
+// second instead of jumping once per poll — mirrors how the game countdown timer works.
+function getLivePlayerSeconds(player, nowMs) {
+  const baseSeconds = Number(player.totalSeconds) || 0;
+  if (!player.inStage) {
+    return baseSeconds;
+  }
+
+  return baseSeconds + Math.max(0, nowMs - lastPlayersFetchMs) / 1000;
+}
+
+function tickPlayerTimes() {
+  if (!latestPlayers.some((player) => player.inStage)) {
+    return;
+  }
+
+  const nowMs = Date.now();
+  const liveSecondsById = new Map(latestPlayers.map((player) => [player.id, getLivePlayerSeconds(player, nowMs)]));
+  const totalGameSeconds = Array.from(liveSecondsById.values()).reduce((sum, seconds) => sum + seconds, 0);
+
+  document.querySelectorAll('[data-player-id]').forEach((cardEl) => {
+    const playerId = Number(cardEl.dataset.playerId);
+    if (!liveSecondsById.has(playerId)) {
+      return;
+    }
+
+    const liveSeconds = liveSecondsById.get(playerId);
+    const shareEl = cardEl.querySelector('[data-field="share"]');
+    const timeEl = cardEl.querySelector('[data-field="time"]');
+    if (shareEl) {
+      shareEl.textContent = formatPercent(liveSeconds, totalGameSeconds);
+    }
+    if (timeEl) {
+      timeEl.textContent = formatMinutes(liveSeconds);
+    }
+  });
+}
+
 const supportsTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
 const dragHandleHtml = `
@@ -197,15 +240,19 @@ function renderGameHeader(game) {
     gameToggleBtn.classList.add('ended');
     gameToggleBtn.setAttribute('aria-pressed', 'true');
   } else {
+    // A game with no start_time yet has never actually had a player clocked in —
+    // whether because it's brand new or was paused before anyone ever took the
+    // field — so the un-pause action reads as "Start" rather than "Resume".
+    gameHasStarted = Number.isFinite(startTimeMs);
     gameToggleBtn.disabled = false;
     gameToggleBtn.classList.remove('ended');
-    gameToggleBtn.textContent = isGameActive ? 'Game End' : 'Game Resume';
+    gameToggleBtn.textContent = isGameActive ? 'Game Pause' : (gameHasStarted ? 'Game Resume' : 'Game Start');
     gameToggleBtn.classList.toggle('resume', !isGameActive);
     gameToggleBtn.setAttribute('aria-pressed', String(!isGameActive));
   }
 
-  stageEl.classList.toggle('disabled', !isGameActive || isGameTimedOut);
-  stageEl.setAttribute('aria-disabled', String(!isGameActive || isGameTimedOut));
+  stageEl.classList.toggle('disabled', isGameTimedOut);
+  stageEl.setAttribute('aria-disabled', String(isGameTimedOut));
 
   const shouldShowCountdown = isGameActive && !isGameTimedOut && Number.isFinite(startTimeMs);
   gameStartTimeMs = shouldShowCountdown ? startTimeMs : null;
@@ -268,7 +315,12 @@ function renderScoreboard(players) {
 }
 
 function renderPlayers(players) {
+  latestPlayers = players;
+  lastPlayersFetchMs = Date.now();
+
   const activePlayers = players.filter((player) => player.inStage);
+  const pausedStagePlayers = players.filter((player) => !player.inStage && pausedFieldPlayerIds.has(player.id));
+  const stagePlayers = [...activePlayers, ...pausedStagePlayers];
   const orderedPlayers = [...players].sort((a, b) => {
     if (Number(a.inStage) !== Number(b.inStage)) {
       return Number(a.inStage) - Number(b.inStage);
@@ -286,22 +338,23 @@ function renderPlayers(players) {
 
   stageEl.innerHTML = '';
 
-  if (activePlayers.length === 0) {
+  if (stagePlayers.length === 0) {
     stageEl.classList.add('is-empty');
     const isPaused = !isGameTimedOut && !isGameActive;
     const emptyMessage = isGameTimedOut
       ? 'This game has ended.'
       : isGameActive
         ? 'Drop players on to field to track play time.'
-        : 'Resume game to bring players on to field.';
+        : `Drop players on to field. Tracking ${gameHasStarted ? 'resumes' : 'starts'} when you hit Game ${gameHasStarted ? 'Resume' : 'Start'}.`;
     stageEl.innerHTML = `<div class="empty-state${isPaused ? ' empty-state-paused' : ''}">${emptyMessage}</div>`;
   } else {
     stageEl.classList.remove('is-empty');
 
-    activePlayers.forEach((player) => {
+    stagePlayers.forEach((player) => {
+      const isPaused = !player.inStage && pausedFieldPlayerIds.has(player.id);
       const stagePlayer = document.createElement('div');
       const uiClass = getPlayHighlightClass(player.totalSeconds, players);
-      stagePlayer.className = 'stage-player';
+      stagePlayer.className = `stage-player${isPaused ? ' paused' : ''}`;
       if (uiClass) {
         stagePlayer.classList.add(uiClass);
       }
@@ -315,11 +368,11 @@ function renderPlayers(players) {
         <div class="time-box">
           <div class="metric-group">
             <span class="time-label">Share</span>
-            <span class="time-value">${formatPercent(player.totalSeconds, totalGameSeconds)}</span>
+            <span class="time-value" data-field="share">${formatPercent(player.totalSeconds, totalGameSeconds)}</span>
           </div>
           <div class="metric-group">
             <span class="time-label">Time</span>
-            <span class="time-value">${formatMinutes(player.totalSeconds)}</span>
+            <span class="time-value" data-field="time">${formatMinutes(player.totalSeconds)}</span>
           </div>
         </div>
       `;
@@ -346,11 +399,11 @@ function renderPlayers(players) {
       <div class="time-box">
         <div class="metric-group">
           <span class="time-label">Share</span>
-          <span class="time-value">${formatPercent(player.totalSeconds, totalGameSeconds)}</span>
+          <span class="time-value" data-field="share">${formatPercent(player.totalSeconds, totalGameSeconds)}</span>
         </div>
         <div class="metric-group">
           <span class="time-label">Time</span>
-          <span class="time-value">${formatMinutes(player.totalSeconds)}</span>
+          <span class="time-value" data-field="time">${formatMinutes(player.totalSeconds)}</span>
         </div>
       </div>
     `;
@@ -360,7 +413,19 @@ function renderPlayers(players) {
 }
 
 async function logPlayerActivity(playerId, inPlay) {
-  if (!isGameActive && inPlay) {
+  if (isGameTimedOut) {
+    return;
+  }
+
+  if (!isGameActive) {
+    // Paused: field membership can still change, but it's only a pending change until
+    // the game is resumed — don't touch the server or start/stop the play-time clock yet.
+    if (inPlay) {
+      pausedFieldPlayerIds.add(playerId);
+    } else {
+      pausedFieldPlayerIds.delete(playerId);
+    }
+    renderPlayers(latestPlayers);
     return;
   }
 
@@ -443,6 +508,12 @@ async function toggleGameStatus() {
   const nextState = !isGameActive;
   const gameId = getCurrentGameId();
 
+  if (!nextState) {
+    // Pausing: remember who's on the field right now so their cards can stay visible
+    // (dimmed) while paused, and so Resume knows who to put back into active play.
+    pausedFieldPlayerIds = new Set(latestPlayers.filter((player) => player.inStage).map((player) => player.id));
+  }
+
   const response = await fetch(`/api/game/${gameId}/status`, {
     method: 'PUT',
     headers: {
@@ -454,11 +525,21 @@ async function toggleGameStatus() {
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     alert(errorData.message || 'Unable to update the game status.');
+    if (!nextState) {
+      pausedFieldPlayerIds = new Set();
+    }
     return;
   }
 
   const gameData = await response.json();
   renderGameHeader(gameData.game);
+
+  if (nextState) {
+    for (const playerId of pausedFieldPlayerIds) {
+      await logPlayerActivity(playerId, true);
+    }
+    pausedFieldPlayerIds = new Set();
+  }
 
   const players = await fetchPlayers();
   renderPlayers(players);
@@ -500,8 +581,10 @@ async function createGame(event) {
 }
 
 function setupDropZones() {
+  // Field membership can be edited whenever the game hasn't permanently timed out —
+  // including while paused, where changes are held as pending until Game Resume.
   const dragOver = (event) => {
-    if (!isGameActive) {
+    if (isGameTimedOut) {
       event.preventDefault();
       return;
     }
@@ -512,7 +595,7 @@ function setupDropZones() {
 
   stageEl.addEventListener('dragover', dragOver);
   playerListEl.addEventListener('dragover', (event) => {
-    if (!isGameActive) {
+    if (isGameTimedOut) {
       event.preventDefault();
       return;
     }
@@ -522,7 +605,7 @@ function setupDropZones() {
 
   stageEl.addEventListener('drop', (event) => {
     event.preventDefault();
-    if (!isGameActive) {
+    if (isGameTimedOut) {
       return;
     }
     const playerId = Number(event.dataTransfer.getData('text/plain'));
@@ -681,7 +764,7 @@ function setupTouchDragAndDrop() {
     dragState.ghostEl.style.top = `${touch.clientY}px`;
 
     const target = document.elementFromPoint(touch.clientX, touch.clientY);
-    stageEl.classList.toggle('drag-target-active', Boolean(target && target.closest('#stage') && isGameActive));
+    stageEl.classList.toggle('drag-target-active', Boolean(target && target.closest('#stage') && !isGameTimedOut));
     playerListEl.classList.toggle('drag-target-active', Boolean(target && target.closest('#player-list')));
   }, { passive: false });
 
@@ -714,6 +797,7 @@ function setupTouchDragAndDrop() {
 async function initializeApp() {
   setupDropZones();
   setupTouchDragAndDrop();
+  setInterval(tickPlayerTimes, 1000);
 
   try {
     const gameData = await fetchCurrentGame();

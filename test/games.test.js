@@ -10,6 +10,7 @@ const {
   createPlayer,
   createGame,
   putOnField,
+  takeOffField,
   rewindGameStartTime
 } = require('./helpers');
 const { GAME_TIME_LIMIT_MS } = require('../src/server');
@@ -65,8 +66,44 @@ test('creating a game requires location and a valid date, and requires access to
   assert.equal(created.status, 201);
   const { game } = await created.json();
   assert.equal(game.name, 'Soccer Match', 'an unspecified name should default to "Soccer Match"');
-  assert.equal(Number(game.is_active), 1);
+  assert.equal(Number(game.is_active), 0, 'new games start paused, not active — see the "Game Start" feature');
   assert.equal(game.start_time, null);
+});
+
+test('a newly created game starts paused: clock-ins are rejected until "Game Start" activates it, which then stamps start_time', async () => {
+  const { cookie } = await registerAndLogIn('GameStartOwner');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Game Start Team');
+  const player = await createPlayer(fetchAs, team.id, 'Lineup', 'Player');
+
+  // Created directly via the raw endpoint (not the createGame test helper, which
+  // activates the game for the convenience of every other test in this suite).
+  const created = await fetchAs('/api/games', {
+    method: 'POST',
+    body: JSON.stringify({ location: 'Kickoff Field', date: '2026-09-13', team_id: team.id })
+  });
+  const { game } = await created.json();
+  assert.equal(Number(game.is_active), 0);
+
+  const clockInBeforeStart = await putOnField(fetchAs, player.id, game.id);
+  assert.equal(
+    clockInBeforeStart.status,
+    409,
+    'dragging a player onto the field before "Game Start" must not start tracking their play time'
+  );
+
+  const startResponse = await fetchAs(`/api/game/${game.id}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({ isActive: true })
+  });
+  assert.equal(startResponse.status, 200);
+  assert.equal(Number((await startResponse.json()).game.is_active), 1);
+
+  const clockInAfterStart = await putOnField(fetchAs, player.id, game.id);
+  assert.equal(clockInAfterStart.status, 201, 'once "Game Start" activates the game, clock-ins succeed');
+
+  const gameAfterStart = await (await fetchAs(`/api/game/${game.id}`)).json();
+  assert.ok(gameAfterStart.game.start_time, 'the first real clock-in after starting should stamp start_time');
 });
 
 test('the games list is scoped to the caller\'s teams and the archived filter works', async () => {
@@ -208,4 +245,56 @@ test('archiving and unarchiving a single game, and bulk-unarchiving a team\'s ar
     body: JSON.stringify({ archived: false })
   });
   assert.equal(outsiderArchiveAttempt.status, 403);
+});
+
+test('pausing a game closes out on-field players and blocks new clock-ins until it is resumed', async () => {
+  // Backs the "Game Pause" feature: pausing must behave exactly like the existing
+  // close-out-on-end logic (not a special no-op state), and while paused the server
+  // must refuse to actually start tracking anyone's play time — the client is
+  // expected to hold such changes as pending until Resume is pressed.
+  const { cookie } = await registerAndLogIn('PauseResumeOwner');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Pause Resume Team');
+  const onFieldPlayer = await createPlayer(fetchAs, team.id, 'OnField', 'Player');
+  const benchPlayer = await createPlayer(fetchAs, team.id, 'Bench', 'Player');
+  const game = await createGame(fetchAs, team.id, 'Pause Field');
+
+  await putOnField(fetchAs, onFieldPlayer.id, game.id);
+
+  const pauseResponse = await fetchAs(`/api/game/${game.id}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({ isActive: false })
+  });
+  assert.equal(pauseResponse.status, 200);
+  assert.equal(Number((await pauseResponse.json()).game.is_active), 0);
+
+  const playersWhilePaused = await (await fetchAs(`/api/players/${game.id}?teamId=${team.id}`)).json();
+  assert.equal(
+    playersWhilePaused.find((p) => p.id === onFieldPlayer.id).inStage,
+    false,
+    'pausing must close out whoever was on the field, the same as ending the game does'
+  );
+
+  const clockInWhilePaused = await putOnField(fetchAs, benchPlayer.id, game.id);
+  assert.equal(clockInWhilePaused.status, 409, 'a paused game must reject new clock-ins, not silently queue them server-side');
+
+  const clockOutWhilePaused = await takeOffField(fetchAs, onFieldPlayer.id, game.id);
+  assert.equal(clockOutWhilePaused.status, 409, 'the already-closed-out player has nothing left to clock out while paused');
+
+  const resumeResponse = await fetchAs(`/api/game/${game.id}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({ isActive: true })
+  });
+  assert.equal(resumeResponse.status, 200);
+  assert.equal(Number((await resumeResponse.json()).game.is_active), 1);
+
+  const reclockOnFieldPlayer = await putOnField(fetchAs, onFieldPlayer.id, game.id);
+  assert.equal(reclockOnFieldPlayer.status, 201, 'once resumed, a player who was on the field before pausing can be clocked back in');
+
+  const reclockBenchPlayer = await putOnField(fetchAs, benchPlayer.id, game.id);
+  assert.equal(reclockBenchPlayer.status, 201, 'once resumed, a player added to the field while paused can also be clocked in for real');
+
+  const playersAfterResume = await (await fetchAs(`/api/players/${game.id}?teamId=${team.id}`)).json();
+  assert.equal(playersAfterResume.find((p) => p.id === onFieldPlayer.id).inStage, true);
+  assert.equal(playersAfterResume.find((p) => p.id === benchPlayer.id).inStage, true);
 });

@@ -932,6 +932,12 @@ button, input {
   border: 1px solid rgba(200, 65, 78, 0.15);
 }
 
+.game-status-badge--paused {
+  background: rgba(240, 180, 41, 0.18);
+  color: #8a5a00;
+  border: 1px solid rgba(240, 180, 41, 0.35);
+}
+
 .game-row-toggle {
   display: inline-flex;
   align-items: center;
@@ -1234,6 +1240,10 @@ h1 {
 .stage-player .status-pill.active {
   background: #dff7ea;
   color: #0d5d38;
+}
+
+.stage-player.paused {
+  opacity: 0.5;
 }
 
 .player-meta {

@@ -130,9 +130,12 @@ router.post('/api/games', async (req, res) => {
     return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
+  // New games start paused (is_active = 0) so a coach can drag players onto the field
+  // to set up the lineup without that starting the clock — play only begins once
+  // "Game Start" is pressed.
   const result = await db.run(
     'INSERT INTO games (name, created_at, location, date, is_active, team_id) VALUES (?, ?, ?, ?, ?, ?)',
-    [gameName, new Date().toISOString(), String(location).trim(), normalizedDate, 1, resolvedTeamId]
+    [gameName, new Date().toISOString(), String(location).trim(), normalizedDate, 0, resolvedTeamId]
   );
 
   const newGame = await db.get(`

@@ -100,7 +100,7 @@ router.post('/api/segments', async (req, res) => {
   game = await enforceGameTimeLimit(game);
 
   if (inPlay && Number(game.is_active) !== 1) {
-    return res.status(409).json({ message: 'This game has ended and can no longer accept players.' });
+    return res.status(409).json({ message: 'This game is not currently active and cannot accept players.' });
   }
 
   const lastActivity = await db.get(

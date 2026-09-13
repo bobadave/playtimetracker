@@ -48,6 +48,31 @@
       let currentGames = [];
       let editingGameId = null;
       const expandedGameIds = new Set();
+      const GAME_TIME_LIMIT_MS = 60 * 60 * 1000;
+
+      // A game only reaches "Ended" once its 1-hour timeout has actually elapsed.
+      // is_active = 0 by itself just means paused (or ended-early via the edit
+      // form below) — it can still be resumed.
+      function isGameTimedOut(game) {
+        if (!game || !game.start_time) {
+          return false;
+        }
+
+        const startMs = new Date(game.start_time).getTime();
+        return Number.isFinite(startMs) && Date.now() - startMs > GAME_TIME_LIMIT_MS;
+      }
+
+      function getGameStatus(game) {
+        if (Number(game.is_active) === 1) {
+          return { label: 'Active', className: 'active' };
+        }
+
+        if (isGameTimedOut(game)) {
+          return { label: 'Ended', className: 'ended' };
+        }
+
+        return { label: 'Paused', className: 'paused' };
+      }
 
       function getCurrentTeamId() {
         const match = window.location.pathname.match(/^\/t(\d+)\/games$/);
@@ -67,6 +92,7 @@
         const teamId = getCurrentTeamId();
         const href = `/t${teamId}/games/${game.id}`;
         const isActive = Number(game.is_active) === 1;
+        const status = getGameStatus(game);
         const editing = editingGameId === game.id;
         const expanded = editing || expandedGameIds.has(game.id);
 
@@ -88,7 +114,7 @@
               <label for="edit-game-status-${game.id}">Status</label>
               <select id="edit-game-status-${game.id}" class="inline-input edit-status">
                 <option value="true" ${isActive ? 'selected' : ''}>Active</option>
-                <option value="false" ${!isActive ? 'selected' : ''}>Ended</option>
+                <option value="false" ${!isActive ? 'selected' : ''}>Paused</option>
               </select>
             </div>
             <div class="row-actions">
@@ -101,7 +127,7 @@
             <div class="game-row-info">
               <div class="game-row-info-item"><span class="game-row-info-label">Location</span><span>${escapeHtml(game.location || 'TBD')}</span></div>
               <div class="game-row-info-item"><span class="game-row-info-label">Date</span><span>${escapeHtml(game.date || 'TBD')}</span></div>
-              <div class="game-row-info-item"><span class="game-row-info-label">Status</span><span>${isActive ? 'Active' : 'Ended'}</span></div>
+              <div class="game-row-info-item"><span class="game-row-info-label">Status</span><span>${status.label}</span></div>
             </div>
             <div class="row-actions">
               <button type="button" class="secondary-btn small-btn" data-action="edit" data-game-id="${game.id}">Edit</button>
@@ -115,7 +141,7 @@
                 <span class="game-row-name">${escapeHtml(game.name || '')}</span>
               </button>
               <div class="game-row-summary-actions">
-                <span class="game-status-badge ${isActive ? 'game-status-badge--active' : 'game-status-badge--ended'}">${isActive ? 'Active' : 'Ended'}</span>
+                <span class="game-status-badge game-status-badge--${status.className}">${status.label}</span>
                 <a href="${href}" class="primary-btn small-btn">View Game</a>
                 <button type="button" class="game-row-toggle" data-action="toggle" data-game-id="${game.id}" aria-expanded="${expanded}" aria-label="Show more details">
                   <span class="game-row-chevron" aria-hidden="true">⌄</span>

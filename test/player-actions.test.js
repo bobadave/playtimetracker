@@ -239,3 +239,49 @@ test('removing a goal only affects the targeted game, leaving other games untouc
   const playersInGameB = await (await fetchAs(`/api/players/${gameB.id}?teamId=${team.id}`)).json();
   assert.equal(playersInGameB.find((p) => p.id === player.id).goals, 1);
 });
+
+test('the roster endpoint reports cumulativeGoals summed across every one of a player\'s games', async () => {
+  const { cookie } = await registerAndLogIn('RosterGoalsTotal');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Roster Goals Team');
+  const scorer = await createPlayer(fetchAs, team.id, 'Roster', 'Scorer');
+  const nonScorer = await createPlayer(fetchAs, team.id, 'No', 'Goals');
+  const gameA = await createGame(fetchAs, team.id, 'Roster Field A');
+  const gameB = await createGame(fetchAs, team.id, 'Roster Field B');
+
+  await putOnField(fetchAs, scorer.id, gameA.id);
+  await logGoal(fetchAs, scorer.id, gameA.id);
+  await logGoal(fetchAs, scorer.id, gameA.id);
+
+  await putOnField(fetchAs, scorer.id, gameB.id);
+  await logGoal(fetchAs, scorer.id, gameB.id);
+
+  const roster = await (await fetchAs(`/api/players?teamId=${team.id}`)).json();
+  assert.equal(roster.find((p) => p.id === scorer.id).cumulativeGoals, 3, 'cumulativeGoals should sum goals from every game, not just the default game');
+  assert.equal(roster.find((p) => p.id === nonScorer.id).cumulativeGoals, 0);
+});
+
+test('the roster endpoint excludes goals scored in archived games from cumulativeGoals, matching cumulativeSeconds behavior', async () => {
+  const { cookie } = await registerAndLogIn('RosterGoalsArchived');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Roster Goals Archived Team');
+  const player = await createPlayer(fetchAs, team.id, 'Archived', 'Scorer');
+  const activeGame = await createGame(fetchAs, team.id, 'Active Field');
+  const archivedGame = await createGame(fetchAs, team.id, 'Archived Field');
+
+  await putOnField(fetchAs, player.id, activeGame.id);
+  await logGoal(fetchAs, player.id, activeGame.id);
+
+  await putOnField(fetchAs, player.id, archivedGame.id);
+  await logGoal(fetchAs, player.id, archivedGame.id);
+  await logGoal(fetchAs, player.id, archivedGame.id);
+
+  await fetchAs(`/api/games/${archivedGame.id}/archive`, { method: 'PUT', body: JSON.stringify({ archived: true }) });
+
+  const roster = await (await fetchAs(`/api/players?teamId=${team.id}`)).json();
+  assert.equal(
+    roster.find((p) => p.id === player.id).cumulativeGoals,
+    1,
+    'goals from an archived game must not count toward the all-time total'
+  );
+});

@@ -35,9 +35,10 @@ Every test file except `db-and-utils.test.js` follows the same shape:
    since `fetch` doesn't persist cookies across calls on its own.
 4. `test/helpers.js` exposes shared setup building blocks
    (`registerAndLogIn`, `createTeam`, `createPlayer`, `createGame`,
-   `putOnField`/`takeOffField`) so every test file exercises the same
-   register → verify → log in → create team → create player → create game →
-   clock in/out flow a real user would, rather than seeding rows directly.
+   `putOnField`/`takeOffField`, `logGoal`/`removeLastGoal`) so every test
+   file exercises the same register → verify → log in → create team →
+   create player → create game → clock in/out → log/remove goal flow a real
+   user would, rather than seeding rows directly.
    It also exposes `rewindGameStartTime(gameId, msAgo)`, which shifts a
    game's `start_time` and all of its `player_activity` rows back by the
    same delta — used wherever a test needs to simulate a game having timed
@@ -131,6 +132,16 @@ bugs — none of which a mocked unit test would have caught.
   `closeOutActivePlayers` helper as everything else.)
 - Archiving/unarchiving a single game, and bulk-unarchiving a team's archived
   games without touching another team's archived games.
+- **Game Pause/Resume**: pausing (`PUT /api/game/:gameId/status` with
+  `isActive: false`) closes out whoever is on the field exactly like ending
+  the game does, and — critically — the server refuses any new clock-in
+  while paused (409), so tracking genuinely cannot resume until the game is
+  explicitly un-paused. This is what makes it safe for the client to let a
+  coach freely add/remove players from the field while paused (see
+  `pausedFieldPlayerIds` in `public/app.js`) without any of it becoming real
+  play time early. After resuming (`isActive: true`), both a player who was
+  on the field before pausing and one added to the field during the pause
+  can be clocked in for real.
 - **Timeout-status regression test**: the games list (`GET /api/games`)
   reflects a timed-out game as ended even when nobody has ever loaded that
   game's own page. `GET /api/game/:gameId` and `GET /api/players/:gameId`
@@ -155,7 +166,39 @@ bugs — none of which a mocked unit test would have caught.
 - A full clock-in → clock-out cycle is reflected in `totalSeconds` and the
   `inStage` flag on both the segment response and the roster endpoint.
 
-### 7. Game timeout (1-hour auto-end) — `game-timeout.test.js`
+### 7. Goal tracking (player actions) — `player-actions.test.js`
+Covers the `player_action` table and the "log a goal" / "undo last goal"
+feature built on top of it.
+- `POST /api/player-actions` requires authentication, a valid `playerId`, and
+  a recognized `action` — today the only enumerated value is `'goal'`,
+  guarding the table's `CHECK (action IN ('goal'))` constraint.
+- Logging a goal for an unknown or archived player is 404; on an unknown game
+  is 404; on a game the caller lacks access to is 403.
+- **On-field requirement**: a goal can only be logged while the player is
+  currently on the field (409 otherwise) — mirrors the same rule the goal
+  button's confirmation popup relies on client-side.
+- Goals accumulate per player *per game*, reflected in the `goals` field of
+  `GET /api/players/:gameId` (2 goals → `goals: 2`, etc.).
+- **Cross-game isolation regression test**: a goal scored in one game must
+  never show up when viewing a different game (a player can appear in
+  multiple games over a season) — verified by scoring in Game A, then
+  checking Game B's player list shows `goals: 0` for that same player.
+- `DELETE /api/player-actions` (undo the last goal) requires the same
+  authentication/validation/team-access checks as logging one.
+- Removing a goal with none recorded is 404; repeated removals decrement the
+  count one at a time and 404 once it reaches zero (there's nothing left to
+  undo).
+- Removing a goal only affects the targeted game — scoring in both Game A
+  and Game B, then removing one from Game B, leaves Game A's count
+  untouched.
+- **Roster all-time totals**: `GET /api/players` reports `cumulativeGoals`
+  summed across *every* game a player has played, not just the current
+  game — this backs the roster page's all-time goals bar chart. A separate
+  test confirms goals scored in an archived game are excluded from that
+  total, mirroring how `cumulativeSeconds` already excludes archived-game
+  playtime.
+
+### 8. Game timeout (1-hour auto-end) — `game-timeout.test.js`
 - `isGameTimedOut` as a pure boundary function.
 - `start_time` lifecycle: `null` on creation, stamped by the first player to
   take the field, unchanged by subsequent players.
@@ -175,14 +218,14 @@ bugs — none of which a mocked unit test would have caught.
   `is_active` level, the `inStage` level, and the raw `player_activity` row
   count (no stray close-out row leaks into an unrelated game).
 
-### 8. Profile — `profile.test.js`
+### 9. Profile — `profile.test.js`
 - Profile endpoints require authentication.
 - Updating name requires both first and last name and persists (visible via
   `/api/session` immediately after).
 - Changing password enforces the 6-character minimum, and the new password
   (not the old one) works on the next login.
 
-### 9. Cross-cutting access control — `access-control.test.js`
+### 10. Cross-cutting access control — `access-control.test.js`
 This file exists specifically so authorization regressions can't hide inside
 a single feature file. It doesn't test business logic — every other file
 does that — it tests the authorization *gate* in front of it, as one matrix:
@@ -227,10 +270,22 @@ before shipping.
   sorting games by date descending, the collapsed/expanded row toggle
   (mirroring the My Teams page's pattern), and the Active/Ended status badge
   shown on the collapsed row are all client-side rendering with no
-  corresponding `node:test` coverage. These were verified manually with
-  Playwright during development but are not part of `npm test` — a
-  regression here would only be caught by manual testing or by adding a
-  browser-driven suite (e.g. Playwright) alongside this one.
+  corresponding `node:test` coverage. On the game page: the "Confirm goal
+  for `<player>`" and "Remove last goal for `<player>`?" Yes/No popups
+  (`showConfirmPopup`/`resolveConfirmPopup` in `public/app.js`) only decide
+  *whether* to call the already-tested `POST`/`DELETE /api/player-actions`
+  endpoints — the confirmation gating itself has no server round-trip to
+  assert against; the live-ticking Share/Time clock (`tickPlayerTimes`)
+  that extrapolates a player's elapsed time between the 10-second polls is
+  pure client-side math; and the Game Pause/Resume feature's pending-edit
+  state (`pausedFieldPlayerIds`) — letting a coach drag players on/off the
+  field while paused without it becoming real play time until Resume — is
+  entirely a `public/app.js` variable with no corresponding server state,
+  so only the server-side contract it depends on (covered in the Games
+  section above) is tested, not the client's bookkeeping itself. All of
+  these were verified manually during development but are not part of
+  `npm test` — a regression here would only be caught by manual testing or
+  by adding a browser-driven suite (e.g. Playwright) alongside this one.
 - **Cross-browser behavior.** The suite talks to the Express API directly; it
   never loads a page in an actual browser engine, so client-side JS bugs
   (rendering, event wiring, `fetch` polyfill gaps) in Safari/Firefox/older
