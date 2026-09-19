@@ -129,3 +129,49 @@ test('createDbApi upgrades an existing database that is missing team_id columns'
     });
   });
 });
+
+test('run, get, and all reject their promise when the underlying SQL errors', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'playtimetracker-'));
+  const dbApi = createDbApi(path.join(tempDir, 'game_time_tracker.db'));
+
+  try {
+    await assert.rejects(() => dbApi.run('NOT VALID SQL'));
+    await assert.rejects(() => dbApi.get('NOT VALID SQL'));
+    await assert.rejects(() => dbApi.all('NOT VALID SQL'));
+  } finally {
+    await new Promise((resolve, reject) => {
+      dbApi.db.close((error) => (error ? reject(error) : resolve()));
+    });
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('initialize is idempotent: calling it a second time preserves existing default-team data via COALESCE rather than clobbering it', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'playtimetracker-'));
+  const dbApi = createDbApi(path.join(tempDir, 'game_time_tracker.db'));
+
+  try {
+    await dbApi.initialize();
+
+    // Give the bootstrapped default team (id 1) a custom name/admin, simulating a
+    // real deployment that has been running for a while, then re-run initialize()
+    // exactly as happens on every server restart.
+    await dbApi.run('UPDATE teams SET team_name = ?, user_admin_id = ? WHERE id = 1', ['Renamed Team', 42]);
+    await dbApi.initialize();
+
+    const team = await dbApi.get('SELECT team_name, user_admin_id FROM teams WHERE id = 1');
+    assert.equal(team.team_name, 'Renamed Team', 'COALESCE must not overwrite an already-set team_name');
+    assert.equal(team.user_admin_id, 42, 'COALESCE must not overwrite an already-set user_admin_id');
+
+    const migrationCount = await dbApi.get('SELECT COUNT(*) AS total FROM schema_migrations');
+    assert.equal(Number(migrationCount.total), 1, 'the bootstrap migration row must not be inserted twice');
+
+    const gameCount = await dbApi.get('SELECT COUNT(*) AS total FROM games WHERE id = 1');
+    assert.equal(Number(gameCount.total), 1, 'the default game must not be inserted twice');
+  } finally {
+    await new Promise((resolve, reject) => {
+      dbApi.db.close((error) => (error ? reject(error) : resolve()));
+    });
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});

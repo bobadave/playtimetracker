@@ -2,12 +2,16 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  db,
   startTestServer,
   stopTestServer,
   registerAndLogIn,
   authedFetch,
   createTeam,
-  createPlayer
+  createPlayer,
+  createGame,
+  putOnField,
+  takeOffField
 } = require('./helpers');
 
 test.before(async () => {
@@ -74,6 +78,16 @@ test('the player list is scoped to the caller\'s team and excludes archived play
 
   const outsiderList = await outsiderFetch(`/api/players?teamId=${team.id}`);
   assert.equal(outsiderList.status, 403);
+});
+
+test('updating a player with a non-numeric or non-positive id is rejected with 400 before touching the database', async () => {
+  const { cookie } = await registerAndLogIn('InvalidPlayerId');
+  const fetchAs = authedFetch(cookie);
+
+  for (const id of ['not-a-number', '-1', '0']) {
+    const response = await fetchAs(`/api/players/${id}`, { method: 'PUT', body: JSON.stringify({ firstName: 'X' }) });
+    assert.equal(response.status, 400, `player id "${id}" should be rejected`);
+  }
 });
 
 test('updating a player: rename works, archive/unarchive via the single-player endpoint works, empty names are rejected, and cross-team access is blocked', async () => {
@@ -156,4 +170,46 @@ test('bulk unarchive only restores archived players on the caller\'s own team, n
     body: JSON.stringify({ teamId: teamB.id })
   });
   assert.equal(outsiderBulkAttempt.status, 403);
+});
+
+test('the roster endpoint excludes recorded play time from an archived game (cumulativeSeconds/cumulativeMinutes)', async () => {
+  const { cookie } = await registerAndLogIn('RosterTimeArchived');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Roster Time Archived Team');
+  const player = await createPlayer(fetchAs, team.id, 'Archived', 'Timer');
+  const activeGame = await createGame(fetchAs, team.id, 'Active Field');
+  const archivedGame = await createGame(fetchAs, team.id, 'Archived Field');
+
+  await putOnField(fetchAs, player.id, activeGame.id);
+  await takeOffField(fetchAs, player.id, activeGame.id);
+  await putOnField(fetchAs, player.id, archivedGame.id);
+  await takeOffField(fetchAs, player.id, archivedGame.id);
+
+  // Rewrite each game's clock-in/clock-out pair to a clean, non-overlapping 100-second
+  // window so the cumulative totals below are exact, rather than depending on how fast
+  // these HTTP round-trips actually ran (and on how getCumulativeSummaryMap merges rows
+  // across games for the same player by timestamp order).
+  async function setDeterministicWindow(gameId, offsetMs) {
+    const rows = await db.all(
+      'SELECT id FROM player_activity WHERE game_id = ? AND player_id = ? ORDER BY id ASC',
+      [gameId, player.id]
+    );
+    const startMs = Date.now() - 4 * 60 * 60 * 1000 + offsetMs;
+    await db.run('UPDATE player_activity SET timestamp = ? WHERE id = ?', [new Date(startMs).toISOString(), rows[0].id]);
+    await db.run('UPDATE player_activity SET timestamp = ? WHERE id = ?', [new Date(startMs + 100000).toISOString(), rows[1].id]);
+  }
+
+  await setDeterministicWindow(activeGame.id, 0);
+  await setDeterministicWindow(archivedGame.id, 200000);
+
+  const beforeArchive = await (await fetchAs(`/api/players?teamId=${team.id}`)).json();
+  const beforePlayer = beforeArchive.find((p) => p.id === player.id);
+  assert.equal(beforePlayer.cumulativeSeconds, 200, 'both games\' 100s segments should count before archiving');
+
+  await fetchAs(`/api/games/${archivedGame.id}/archive`, { method: 'PUT', body: JSON.stringify({ archived: true }) });
+
+  const afterArchive = await (await fetchAs(`/api/players?teamId=${team.id}`)).json();
+  const afterPlayer = afterArchive.find((p) => p.id === player.id);
+  assert.equal(afterPlayer.cumulativeSeconds, 100, 'only the still-active game\'s 100s should remain once the other game is archived');
+  assert.equal(afterPlayer.cumulativeMinutes, afterPlayer.cumulativeSeconds / 60);
 });

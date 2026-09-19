@@ -178,6 +178,9 @@ test('removing a goal for an unknown or archived player, or a game the caller la
   const unknownPlayer = await removeLastGoal(ownerFetch, 999999, game.id);
   assert.equal(unknownPlayer.status, 404);
 
+  const unknownGame = await removeLastGoal(ownerFetch, player.id, 999999);
+  assert.equal(unknownGame.status, 404);
+
   const noAccessGame = await removeLastGoal(outsiderFetch, player.id, game.id);
   assert.equal(noAccessGame.status, 403);
 

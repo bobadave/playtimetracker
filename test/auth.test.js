@@ -275,6 +275,118 @@ test('an expired password reset token is rejected even though it matches', async
   assert.equal(confirmResponse.status, 400);
 });
 
+test('login and password-reset endpoints validate required fields before touching the database', async () => {
+  const missingLogin = await fetch(`${baseUrl}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: '', password: '' })
+  });
+  assert.equal(missingLogin.status, 400);
+
+  const missingResetRequest = await fetch(`${baseUrl}/api/password-reset/request`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: '' })
+  });
+  assert.equal(missingResetRequest.status, 400);
+
+  const missingResetConfirmToken = await fetch(`${baseUrl}/api/password-reset/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: '', password: 'password123' })
+  });
+  assert.equal(missingResetConfirmToken.status, 400);
+
+  const shortResetConfirmPassword = await fetch(`${baseUrl}/api/password-reset/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: 'some-token', password: '123' })
+  });
+  assert.equal(shortResetConfirmPassword.status, 400);
+
+  const missingResendEmail = await fetch(`${baseUrl}/api/resend-verification`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: '' })
+  });
+  assert.equal(missingResendEmail.status, 400);
+});
+
+test('visiting /verify-email with no token at all is a distinct 400 from an invalid one', async () => {
+  const response = await fetch(`${baseUrl}/verify-email`);
+  assert.equal(response.status, 400);
+  const body = await response.text();
+  assert.match(body, /Missing verification token/);
+});
+
+test('/verify-email reports "already verified" for the edge case where the flag is set but the token was never cleared', async () => {
+  // Under normal operation this branch is unreachable — the only place that sets
+  // email_verified also clears verification_token in the same UPDATE. This directly
+  // constructs that state to exercise the branch on its own.
+  const email = `alreadyflagged${Date.now()}@example.com`;
+  const regResponse = await fetch(`${baseUrl}/api/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ firstName: 'Already', lastName: 'Flagged', email, password: 'password123' })
+  });
+  const { verificationUrl } = await regResponse.json();
+  const parsed = new URL(verificationUrl);
+
+  await db.run('UPDATE users SET email_verified = 1 WHERE email = ?', [email]);
+
+  const response = await fetch(`${baseUrl}${parsed.pathname}${parsed.search}`);
+  assert.equal(response.status, 200);
+  const body = await response.text();
+  assert.match(body, /Email Already Verified/);
+});
+
+test('resend-verification succeeds for a real, not-yet-verified account and re-arms it for verification', async () => {
+  const email = `resendme${Date.now()}@example.com`;
+  await fetch(`${baseUrl}/api/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ firstName: 'Resend', lastName: 'Me', email, password: 'password123' })
+  });
+
+  const resendResponse = await fetch(`${baseUrl}/api/resend-verification`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email })
+  });
+  assert.equal(resendResponse.status, 200);
+
+  const afterResend = await db.get('SELECT verification_token FROM users WHERE email = ?', [email]);
+  assert.ok(afterResend.verification_token, 'a fresh verification token should be set');
+
+  const loginBeforeVerify = await fetch(`${baseUrl}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: 'password123' })
+  });
+  assert.equal(loginBeforeVerify.status, 403, 'the account should still be unverified');
+});
+
+test('/api/session reports { user: null } and clears the session when the logged-in user no longer exists in the database', async () => {
+  const { cookie, email } = await registerAndLogIn('DeletedUserSession');
+  const fetchAs = authedFetch(cookie);
+
+  const beforeDelete = await fetchAs('/api/session');
+  assert.ok((await beforeDelete.json()).user, 'should report a real user before deletion');
+
+  // The server stores emails lowercased; registerAndLogIn's label ("DeletedUserSession")
+  // has uppercase letters, so the raw `email` here won't match the stored row as-is.
+  await db.run('DELETE FROM users WHERE email = ?', [email.toLowerCase()]);
+
+  const afterDelete = await fetchAs('/api/session');
+  assert.equal(afterDelete.status, 200);
+  assert.equal((await afterDelete.json()).user, null);
+
+  // The session should have been destroyed as a side effect, so a subsequent
+  // protected request with the same cookie is now unauthenticated too.
+  const protectedAfterDelete = await fetchAs('/api/teams');
+  assert.equal(protectedAfterDelete.status, 401);
+});
+
 test('registration only echoes verificationUrl outside production (dev/test convenience, not a production behavior)', async () => {
   const email = `devonly${Date.now()}@example.com`;
   const response = await fetch(`${baseUrl}/api/register`, {

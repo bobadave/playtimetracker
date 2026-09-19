@@ -16,6 +16,15 @@ Each file runs in its own child process (Node's default for the built-in test
 runner), which is why each one is free to point the app at its own disposable
 SQLite database without interfering with the others.
 
+To see a line/branch/function coverage report for `src/`:
+
+```bash
+node --test --experimental-test-coverage --test-coverage-include='src/**'
+```
+
+This only measures server-side code (`src/`). It says nothing about
+`public/` — see "Client-side-only logic" under Gaps below.
+
 ## How these tests work
 
 Every test file except `db-and-utils.test.js` follows the same shape:
@@ -66,6 +75,12 @@ bugs — none of which a mocked unit test would have caught.
   default game, seeded players) from nothing.
 - `createDbApi` upgrades a legacy database missing `team_id` columns via
   `ensureColumn`, without losing existing data.
+- `run`/`get`/`all` all reject their returned promise when the underlying SQL
+  errors, instead of hanging or throwing synchronously.
+- `initialize()` is idempotent: calling it a second time (what happens on
+  every server restart against an existing database) preserves the default
+  team's `team_name`/`user_admin_id` via `COALESCE` rather than clobbering
+  them, and doesn't insert duplicate `schema_migrations`/default-game rows.
 
 ### 2. Authentication & account lifecycle — `auth.test.js`
 - Registration: required-field validation, password minimum length,
@@ -88,6 +103,18 @@ bugs — none of which a mocked unit test would have caught.
   suite verify accounts without a real inbox; see the Gaps section for why
   that also means the *production* codepath (`IS_PRODUCTION === true`) isn't
   exercised.
+- Missing-field validation on login, password-reset request/confirm, and
+  resend-verification (each 400), and visiting `/verify-email` with no
+  token at all (400, distinct from an invalid-but-present one).
+- `/verify-email`'s "Already Verified" branch — unreachable in normal
+  operation since the only code path that sets `email_verified` also clears
+  `verification_token` in the same update — is exercised directly by
+  setting the flag while leaving the token in place.
+- Resend-verification's success path for a real, not-yet-verified account
+  (200, and a fresh `verification_token` is stored).
+- `/api/session` reports `{ user: null }` and destroys the session (so a
+  follow-up protected request also 401s) when the logged-in user's row has
+  been deleted out from under an otherwise-valid session.
 
 ### 3. Teams — `teams.test.js`
 - Every team endpoint requires authentication.
@@ -101,6 +128,16 @@ bugs — none of which a mocked unit test would have caught.
   joining an unknown team is 404; leaving (`DELETE .../membership`) revokes
   access, puts the team back in the directory, and does **not** delete the
   team itself for other members.
+- A user with zero team memberships gets `{ teams: [] }` from `GET
+  /api/teams` rather than an error.
+- Joining with a missing/non-numeric/non-positive `teamId` is 400.
+- Renaming to an empty/whitespace-only name is 400.
+- Leaving a team the caller isn't a member of is 404.
+- Reading a team whose row no longer exists but is still listed in the
+  caller's own membership is 404 — not reachable through this app's normal
+  flows (nothing lets a team row vanish while membership references
+  survive), so it's constructed directly by deleting the row and reading
+  it back, to exercise that defensive branch on its own.
 
 ### 4. Players — `players.test.js`
 - Every player endpoint requires authentication.
@@ -116,6 +153,15 @@ bugs — none of which a mocked unit test would have caught.
 - Bulk unarchive (`PUT /api/players/unarchive`) only restores archived
   players on the caller's own team, never a different team's, even though
   both are "archived" in the same table.
+- Updating a player with a non-numeric or non-positive id (`"abc"`, `-1`,
+  `0`) is 400, before any database lookup.
+- The roster endpoint (`GET /api/players`) excludes a player's recorded play
+  time from an archived game: two games are given clean, non-overlapping
+  100-second segments (deterministic, not dependent on real request timing —
+  and non-overlapping specifically because `getCumulativeSummaryMap` merges
+  activity rows across *all* of a player's games by timestamp, so overlapping
+  windows would produce ambiguous results); archiving one drops
+  `cumulativeSeconds` from 200 to exactly 100.
 
 ### 5. Games — `games.test.js`
 - Every game-management endpoint requires authentication.
@@ -160,6 +206,22 @@ bugs — none of which a mocked unit test would have caught.
   test creates a game, times out quarter 1 via `rewindQuarterStartTime`,
   and asserts against the list endpoint only, never touching the individual
   game's endpoints, to make sure this can't regress.
+- `GET /api/game/:gameId` for an unknown game is 404 (the legacy `GET
+  /api/game` default-game endpoint is also smoke-tested).
+- Creating a game via `month`/`day`/`year` fields assembles the same
+  zero-padded `YYYY-MM-DD` date as passing `date` directly, and an
+  incomplete month/day/year (e.g. a missing day) is 400 — this is a second,
+  separate date-construction path from the one every other test exercises
+  by passing `date` straight through.
+- `PUT /api/game/:gameId/status` (the route the client's Game
+  Start/Pause/Resume button actually calls): missing `isActive` is 400,
+  an unknown game is 404, and no team access is 403 — the pause/resume
+  regression test above only exercises this route's success paths.
+- `PUT /api/games/unarchive` is rejected (403) for a team the caller
+  doesn't belong to.
+- `PUT /api/games/:gameId` (edit form): an unknown game is 404, and an
+  invalid date string is 400.
+- `PUT /api/games/:gameId/archive` for an unknown game is 404.
 
 ### 6. Player clock-in/clock-out segments — `segments.test.js`
 - `POST /api/segments` requires authentication and validates `playerId` /
@@ -174,6 +236,10 @@ bugs — none of which a mocked unit test would have caught.
   show up on Game B's stage).
 - A full clock-in → clock-out cycle is reflected in `totalSeconds` and the
   `inStage` flag on both the segment response and the roster endpoint.
+- `GET /api/stage` (the legacy default-game variant, no `:gameId`) reflects
+  a player being clocked in and out of the seeded default game (id 1) — the
+  `:gameId` variant above was already covered, but the default-game one
+  wasn't. The test joins the seeded default team to get access.
 
 ### 7. Goal tracking (player actions) — `player-actions.test.js`
 Covers the `player_action` table and the "log a goal" / "undo last goal"
@@ -193,7 +259,9 @@ feature built on top of it.
   multiple games over a season) — verified by scoring in Game A, then
   checking Game B's player list shows `goals: 0` for that same player.
 - `DELETE /api/player-actions` (undo the last goal) requires the same
-  authentication/validation/team-access checks as logging one.
+  authentication/validation/team-access checks as logging one, including an
+  unknown game (404) — logging's version of this check was already covered,
+  removing's wasn't.
 - Removing a goal with none recorded is 404; repeated removals decrement the
   count one at a time and 404 once it reaches zero (there's nothing left to
   undo).
@@ -272,6 +340,89 @@ does that — it tests the authorization *gate* in front of it, as one matrix:
   accessed) is still refused — membership is checked per-team, not just
   "is this user logged in."
 
+### 11. Page routes — `pages.test.js`
+`src/routes/pages.js` serves the app's HTML shell pages (as opposed to the
+JSON API every other file talks to) — login/register/forgot-password/
+reset-password, the logged-in-only teams/profile pages, the team-scoped
+roster/games/new-game pages and their un-scoped `/roster`, `/games`,
+`/new-game` shortcuts, the game-detail page, static asset serving, and the
+catch-all. Nothing else in the suite ever requests these routes.
+- `/` redirects to `/login` logged out, `/teams` logged in.
+- The logged-out-only pages (login, register, forgot/reset-password) serve
+  HTML when logged out and redirect to `/teams` when already logged in.
+- The logged-in-only pages (`/teams`, `/profile`) redirect to `/login` when
+  logged out and serve HTML when logged in.
+- The un-scoped shortcuts (`/roster`, `/games`, `/new-game`) redirect to
+  `/login` when logged out, and to `/t<defaultTeamId>/...` when logged in.
+- The team-scoped pages (`/t:teamId/roster`, `/games`, `/new-game`) serve
+  HTML for a member, redirect a non-member to `/teams`, and redirect a
+  logged-out request to `/login`.
+- `/games/:gameId` redirects to that game's own team path when the game
+  exists, and falls back to the default team when it doesn't.
+- `/t:teamId/games/:gameId` follows the same member/non-member/logged-out
+  pattern as the other team-scoped pages.
+- A static asset (`/styles.css`) is served, and an unrecognized path falls
+  through to the catch-all `index.html`.
+
+### 12. Mailer — `mailer.test.js`
+`src/mailer.js` decides once, at module load, whether to build a real SMTP
+transporter, based on `SMTP_*` env vars — every other test file runs with
+none of those set, so `isConfigured` is always false there. This file
+clears the require cache and re-requires the module after setting `SMTP_*`
+env vars, so its top-level code re-evaluates against a "configured"
+environment, to reach the branch nothing else does.
+- With no SMTP env vars set, `isConfigured` is `false` and `sendMail`
+  no-ops, returning `{ delivered: false }` without attempting a connection.
+- With `SMTP_HOST`/`SMTP_USER`/`SMTP_PASS` all set, `isConfigured` is `true`
+  and a real transporter is built; pointing it at `127.0.0.1:1` (a
+  privileged port nothing listens on — an immediate, deterministic
+  `ECONNREFUSED`, not a real network dependency or a hanging timeout) makes
+  `sendMail` surface `{ delivered: false, error }` rather than throwing.
+  See Gaps for why the actual successful-send branch isn't covered.
+
+### 13. Server entrypoint — `server-entrypoint.test.js`
+Every other file requires `src/server.js` as a module, so `if
+(require.main === module) { startServer().catch(...) }` at the bottom of
+that file never runs (`require.main` is the test runner, not `server.js`).
+This file spawns `node src/server.js` as a real child process — the actual
+way this app is started in production — to cover both branches.
+- A normal start: spawned with a fresh `DB_PATH`/`PORT`, polled until it
+  responds, `GET /login` returns 200, nothing is logged to stderr.
+- A failed start: spawned with `DB_PATH` pointing at a file that exists but
+  isn't a valid SQLite database (`SQLITE_NOTADB`), which makes
+  `db.initialize()`'s very first statement reject cleanly. The process is
+  asserted to exit with code 1 and log `Failed to start server:` to stderr.
+  (A path that can't be *opened* at all — e.g. pointing at a directory —
+  was deliberately avoided: `sqlite3` surfaces that as an unhandled
+  `'error'` event on the `Database` instance, which crashes the process
+  before `startServer()`'s promise chain ever gets a chance to reject, so
+  it wouldn't actually exercise the `.catch()` branch this test targets.)
+
+### 14. Internal library unit tests — `lib-units.test.js`
+Direct, no-HTTP-route unit tests for `src/lib/*` functions whose guard
+clauses or entire bodies aren't naturally exercised through the app's own
+call sites (which normally only ever call them with legitimate, truthy
+input from a real session).
+- `parseUserTeamIds` (`src/lib/teams.js`): empty/null/malformed-JSON input
+  all safely return `[]`; malformed JSON is caught, not thrown; non-numeric
+  and non-positive entries are filtered out of otherwise-valid arrays.
+- `userHasTeamAccess` and `getCurrentUserTeamIds`: both short-circuit to
+  `false`/`[]` for a missing `userId` (or, for the former, an invalid
+  `teamId`) without a database round-trip.
+- `syncUserTeamMembership`: a no-op that resolves without throwing when
+  given a missing `userId` or `teamId`.
+- `requireAuth` (`src/lib/session.js`, Express middleware): defined but
+  never actually wired into any route in this codebase, so it's invoked
+  directly here with hand-built mock `req`/`res`/`next` — 401s an
+  unauthenticated request without calling `next()`, calls `next()` for an
+  authenticated one without writing a response.
+- `getCumulativePlayerSeconds` (`src/lib/activity.js`): exported but never
+  called by any route (the roster endpoint uses the batch
+  `getCumulativeSummaryMap` instead) — called directly to confirm it sums a
+  player's time across their non-archived games and excludes archived ones,
+  the same guarantee `players.test.js` verifies for the route-facing
+  version.
+
 ## Gaps: what this suite cannot verify
 
 Some things are out of reach for an automated HTTP-level suite, or would cost
@@ -279,15 +430,27 @@ far more to automate than they're worth for this app's size. These need
 manual verification — when touching the related code, check them by hand
 before shipping.
 
-- **Real email delivery.** The suite never talks to SMTP; `sendMail` no-ops
-  when SMTP env vars are unset (the default in tests), and verification/reset
-  links are consumed directly from the JSON response instead of an inbox.
-  Untested: actual Gmail/SMTP auth working, email formatting/rendering in a
-  real mail client, spam filtering, and the production codepath where
-  `verificationUrl` is *not* echoed back in the API response (since
-  `IS_PRODUCTION` is never true in the test process) — that path can only be
-  exercised by registering against a real deployment with `NODE_ENV=production`
-  and checking the inbox.
+- **Real email delivery.** Registration/password-reset tests never talk to
+  SMTP; `sendMail` no-ops when SMTP env vars are unset (the default there),
+  and verification/reset links are consumed directly from the JSON response
+  instead of an inbox. `mailer.test.js` separately covers the "SMTP
+  configured but the connection fails" branch against an unreachable fake
+  host, but a genuinely *successful* send — the `return { delivered: true }`
+  branch after `await transporter.sendMail(...)` resolves — is still
+  untested: it would need either a real SMTP server or a hand-rolled fake
+  one that correctly speaks enough of the SMTP protocol for `nodemailer` to
+  complete a session against it, and this project doesn't currently depend
+  on a library for either. Also untested: actual Gmail/SMTP auth working,
+  email formatting/rendering in a real mail client, spam filtering, and the
+  production codepath where `verificationUrl` is *not* echoed back in the
+  API response (since `IS_PRODUCTION` is never true in the test process) —
+  that path can only be exercised by registering against a real deployment
+  with `NODE_ENV=production` and checking the inbox.
+- **A broken session store on logout.** `POST /api/logout`'s `if (error) {
+  return res.status(500)... }` branch only runs if `req.session.destroy()`
+  itself fails — with the default in-memory `express-session` store used
+  everywhere in this suite, destroy essentially never fails, and there's no
+  way to inject a broken store from outside an HTTP request. Untested.
 - **Touch drag-and-drop gestures.** The custom touch drag-and-drop system in
   `public/app.js` (drag handle, edge-of-screen auto-scroll) responds to real
   `touchstart`/`touchmove`/`touchend` events and viewport geometry. This

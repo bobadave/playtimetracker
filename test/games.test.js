@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   startTestServer,
   stopTestServer,
+  getBaseUrl,
   registerAndLogIn,
   authedFetch,
   createTeam,
@@ -301,4 +302,209 @@ test('pausing a game closes out on-field players and blocks new clock-ins until 
   const playersAfterResume = await (await fetchAs(`/api/players/${game.id}?teamId=${team.id}`)).json();
   assert.equal(playersAfterResume.find((p) => p.id === onFieldPlayer.id).inStage, true);
   assert.equal(playersAfterResume.find((p) => p.id === benchPlayer.id).inStage, true);
+});
+
+test('GET /api/game (the legacy default-game endpoint) returns the default game', async () => {
+  const response = await fetch(`${getBaseUrl()}/api/game`);
+  assert.equal(response.status, 200);
+  const { game } = await response.json();
+  assert.equal(game.id, 1);
+});
+
+test('GET /api/games with no teamId and zero team memberships returns an empty list rather than erroring', async () => {
+  const { cookie } = await registerAndLogIn('GamesListNoTeams');
+  const fetchAs = authedFetch(cookie);
+
+  const response = await fetchAs('/api/games');
+  assert.equal(response.status, 200);
+  const { games } = await response.json();
+  assert.deepEqual(games, []);
+});
+
+test('PUT /api/games/:gameId/archive requires a boolean archived field', async () => {
+  const { cookie } = await registerAndLogIn('ArchiveValidation');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Archive Validation Team');
+  const game = await createGame(fetchAs, team.id, 'Archive Validation Field');
+
+  const response = await fetchAs(`/api/games/${game.id}/archive`, {
+    method: 'PUT',
+    body: JSON.stringify({ archived: 'not-a-boolean' })
+  });
+  assert.equal(response.status, 400);
+});
+
+test('PUT /api/games/:gameId (edit form) cannot reactivate a game that has already finished all 4 quarters', async () => {
+  const { cookie } = await registerAndLogIn('EditFinishedGame');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Edit Finished Game Team');
+  const game = await createGame(fetchAs, team.id, 'Edit Finished Field');
+
+  for (let quarter = 1; quarter <= 4; quarter += 1) {
+    await fetchAs(`/api/game/${game.id}/status`, { method: 'PUT', body: JSON.stringify({ isActive: true }) });
+    await fetchAs(`/api/game/${game.id}/end-quarter`, { method: 'POST' });
+  }
+
+  const response = await fetchAs(`/api/games/${game.id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name: 'Still Finished', location: 'Field', date: '2026-09-19', isActive: true })
+  });
+  assert.equal(response.status, 409);
+});
+
+test('PUT /api/game/status (legacy body-param status endpoint) behaves the same as the :gameId variant', async () => {
+  const { cookie } = await registerAndLogIn('LegacyStatusOwner');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Legacy Status Team');
+  const player = await createPlayer(fetchAs, team.id, 'Legacy', 'Status');
+  const game = await createGame(fetchAs, team.id, 'Legacy Status Field');
+
+  const missingIsActive = await fetchAs('/api/game/status', {
+    method: 'PUT',
+    body: JSON.stringify({ gameId: game.id })
+  });
+  assert.equal(missingIsActive.status, 400);
+
+  const unknownGame = await fetchAs('/api/game/status', {
+    method: 'PUT',
+    body: JSON.stringify({ gameId: 999999, isActive: true })
+  });
+  assert.equal(unknownGame.status, 404);
+
+  const outsider = await registerAndLogIn('LegacyStatusOutsider');
+  const outsiderFetch = authedFetch(outsider.cookie);
+  const noAccess = await outsiderFetch('/api/game/status', {
+    method: 'PUT',
+    body: JSON.stringify({ gameId: game.id, isActive: true })
+  });
+  assert.equal(noAccess.status, 403);
+
+  await putOnField(fetchAs, player.id, game.id);
+  const pauseResponse = await fetchAs('/api/game/status', {
+    method: 'PUT',
+    body: JSON.stringify({ gameId: game.id, isActive: false })
+  });
+  assert.equal(pauseResponse.status, 200);
+  const pausedGame = await pauseResponse.json();
+  assert.equal(Number(pausedGame.game.is_active), 0);
+  assert.ok(Array.isArray(pausedGame.game.quarters));
+
+  const resumeResponse = await fetchAs('/api/game/status', {
+    method: 'PUT',
+    body: JSON.stringify({ gameId: game.id, isActive: true })
+  });
+  assert.equal(resumeResponse.status, 200);
+  assert.equal(Number((await resumeResponse.json()).game.is_active), 1);
+
+  for (let quarter = 1; quarter <= 4; quarter += 1) {
+    if (quarter > 1) {
+      await fetchAs('/api/game/status', { method: 'PUT', body: JSON.stringify({ gameId: game.id, isActive: true }) });
+    }
+    await fetchAs(`/api/game/${game.id}/end-quarter`, { method: 'POST' });
+  }
+
+  const resumeAfterFinish = await fetchAs('/api/game/status', {
+    method: 'PUT',
+    body: JSON.stringify({ gameId: game.id, isActive: true })
+  });
+  assert.equal(resumeAfterFinish.status, 409, 'a finished game cannot be resumed via the legacy endpoint either');
+});
+
+test('GET /api/game/:gameId for an unknown game is 404', async () => {
+  const { cookie } = await registerAndLogIn('UnknownGameGet');
+  const fetchAs = authedFetch(cookie);
+
+  const response = await fetchAs('/api/game/999999');
+  assert.equal(response.status, 404);
+});
+
+test('creating a game via month/day/year builds the same date as passing it directly, and an incomplete month/day/year is rejected', async () => {
+  const { cookie } = await registerAndLogIn('MonthDayYearOwner');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Month Day Year Team');
+
+  const incomplete = await fetchAs('/api/games', {
+    method: 'POST',
+    body: JSON.stringify({ location: 'Field', month: '9', day: '', year: '2026', team_id: team.id })
+  });
+  assert.equal(incomplete.status, 400);
+
+  const created = await fetchAs('/api/games', {
+    method: 'POST',
+    body: JSON.stringify({ location: 'Field', month: '9', day: '6', year: '2026', team_id: team.id })
+  });
+  assert.equal(created.status, 201);
+  const { game } = await created.json();
+  assert.equal(game.date, '2026-09-06', 'month/day/year should be zero-padded and assembled into YYYY-MM-DD');
+});
+
+test('PUT /api/game/:gameId/status validates isActive, and checks the game exists and the caller has team access', async () => {
+  const owner = await registerAndLogIn('StatusValidationOwner');
+  const outsider = await registerAndLogIn('StatusValidationOutsider');
+  const ownerFetch = authedFetch(owner.cookie);
+  const outsiderFetch = authedFetch(outsider.cookie);
+  const team = await createTeam(ownerFetch, 'Status Validation Team');
+  const game = await createGame(ownerFetch, team.id, 'Status Validation Field');
+
+  const missingIsActive = await ownerFetch(`/api/game/${game.id}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({})
+  });
+  assert.equal(missingIsActive.status, 400);
+
+  const unknownGame = await ownerFetch('/api/game/999999/status', {
+    method: 'PUT',
+    body: JSON.stringify({ isActive: true })
+  });
+  assert.equal(unknownGame.status, 404);
+
+  const noAccess = await outsiderFetch(`/api/game/${game.id}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({ isActive: true })
+  });
+  assert.equal(noAccess.status, 403);
+});
+
+test('PUT /api/games/unarchive is rejected for a team the caller does not belong to', async () => {
+  const owner = await registerAndLogIn('UnarchiveNoAccessOwner');
+  const outsider = await registerAndLogIn('UnarchiveNoAccessOutsider');
+  const ownerFetch = authedFetch(owner.cookie);
+  const outsiderFetch = authedFetch(outsider.cookie);
+  const team = await createTeam(ownerFetch, 'Unarchive No Access Team');
+
+  const response = await outsiderFetch('/api/games/unarchive', {
+    method: 'PUT',
+    body: JSON.stringify({ teamId: team.id })
+  });
+  assert.equal(response.status, 403);
+});
+
+test('PUT /api/games/:gameId (edit form): unknown game is 404, and an invalid date is 400', async () => {
+  const { cookie } = await registerAndLogIn('EditFormValidation');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Edit Form Validation Team');
+  const game = await createGame(fetchAs, team.id, 'Edit Form Validation Field');
+
+  const unknownGame = await fetchAs('/api/games/999999', {
+    method: 'PUT',
+    body: JSON.stringify({ name: 'X', location: 'X', date: '2026-09-19', isActive: true })
+  });
+  assert.equal(unknownGame.status, 404);
+
+  const invalidDate = await fetchAs(`/api/games/${game.id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name: 'X', location: 'X', date: 'not-a-real-date', isActive: true })
+  });
+  assert.equal(invalidDate.status, 400);
+});
+
+test('PUT /api/games/:gameId/archive for an unknown game is 404', async () => {
+  const { cookie } = await registerAndLogIn('ArchiveUnknownGame');
+  const fetchAs = authedFetch(cookie);
+
+  const response = await fetchAs('/api/games/999999/archive', {
+    method: 'PUT',
+    body: JSON.stringify({ archived: true })
+  });
+  assert.equal(response.status, 404);
 });

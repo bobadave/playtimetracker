@@ -143,3 +143,25 @@ test('a completed clock-in/clock-out segment is reflected in the player\'s total
   assert.equal(outSummary.isInStage, false);
   assert.ok(outSummary.totalSeconds >= 0);
 });
+
+test('GET /api/stage (the legacy default-game endpoint) reflects players on the seeded default game\'s field', async () => {
+  const { cookie } = await registerAndLogIn('DefaultStage');
+  const fetchAs = authedFetch(cookie);
+
+  // Join the seeded default team (id 1) so we're allowed to clock a player into the
+  // seeded default game (id 1) — the one GET /api/stage (no gameId) always reads.
+  await fetchAs('/api/teams/join', { method: 'POST', body: JSON.stringify({ teamId: 1 }) });
+  const player = await createPlayer(fetchAs, 1, 'Default', 'Stage');
+
+  await putOnField(fetchAs, player.id, 1);
+
+  const response = await fetchAs('/api/stage');
+  assert.equal(response.status, 200);
+  const stage = await response.json();
+  assert.ok(stage.some((p) => p.id === player.id));
+
+  await takeOffField(fetchAs, player.id, 1);
+
+  const afterClockOut = await (await fetchAs('/api/stage')).json();
+  assert.ok(!afterClockOut.some((p) => p.id === player.id));
+});

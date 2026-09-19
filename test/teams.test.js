@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  db,
   startTestServer,
   stopTestServer,
   registerAndLogIn,
@@ -138,4 +139,61 @@ test('team directory only lists teams the current user has not already joined, a
   // The team itself must still exist — leaving only removes the user's own membership.
   const stillExists = await creatorFetch(`/api/teams/${team.id}`);
   assert.equal(stillExists.status, 200);
+});
+
+test('GET /api/teams for a user with zero memberships returns an empty list rather than erroring', async () => {
+  const { cookie } = await registerAndLogIn('NoTeamsYet');
+  const fetchAs = authedFetch(cookie);
+
+  const response = await fetchAs('/api/teams');
+  assert.equal(response.status, 200);
+  const { teams } = await response.json();
+  assert.deepEqual(teams, []);
+});
+
+test('joining a team with a missing or invalid teamId is rejected with 400', async () => {
+  const { cookie } = await registerAndLogIn('JoinValidation');
+  const fetchAs = authedFetch(cookie);
+
+  for (const body of [{}, { teamId: null }, { teamId: 'not-a-number' }, { teamId: -1 }, { teamId: 0 }]) {
+    const response = await fetchAs('/api/teams/join', { method: 'POST', body: JSON.stringify(body) });
+    assert.equal(response.status, 400, `teamId ${JSON.stringify(body.teamId)} should be rejected`);
+  }
+});
+
+test('renaming a team to an empty name is rejected with 400', async () => {
+  const { cookie } = await registerAndLogIn('RenameEmptyName');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Rename Empty Team');
+
+  const response = await fetchAs(`/api/teams/${team.id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ teamName: '   ' })
+  });
+  assert.equal(response.status, 400);
+});
+
+test('leaving a team the caller is not a member of is rejected with 404', async () => {
+  const owner = await registerAndLogIn('MembershipOwner');
+  const notMember = await registerAndLogIn('MembershipNotMember');
+  const ownerFetch = authedFetch(owner.cookie);
+  const notMemberFetch = authedFetch(notMember.cookie);
+  const team = await createTeam(ownerFetch, 'Membership Team');
+
+  const response = await notMemberFetch(`/api/teams/${team.id}/membership`, { method: 'DELETE' });
+  assert.equal(response.status, 404);
+});
+
+test('reading a team whose row no longer exists (but is still listed in the caller\'s membership) is 404', async () => {
+  // Not reachable through this app's own API in normal operation — every route that
+  // removes a team also cleans up membership. Constructed directly to exercise the
+  // "member of a team that isn't actually there" branch on its own.
+  const { cookie } = await registerAndLogIn('GhostTeamMember');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Ghost Team');
+
+  await db.run('DELETE FROM teams WHERE id = ?', [team.id]);
+
+  const response = await fetchAs(`/api/teams/${team.id}`);
+  assert.equal(response.status, 404);
 });
