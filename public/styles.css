@@ -1304,7 +1304,8 @@ h1 {
   align-items: flex-start;
   justify-content: flex-end;
   gap: 14px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .metric-group {
