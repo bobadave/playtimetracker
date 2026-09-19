@@ -39,10 +39,12 @@ Every test file except `db-and-utils.test.js` follows the same shape:
    file exercises the same register → verify → log in → create team →
    create player → create game → clock in/out → log/remove goal flow a real
    user would, rather than seeding rows directly.
-   It also exposes `rewindGameStartTime(gameId, msAgo)`, which shifts a
-   game's `start_time` and all of its `player_activity` rows back by the
-   same delta — used wherever a test needs to simulate a game having timed
-   out without actually waiting an hour.
+   It also exposes `rewindQuarterStartTime(gameId, quarterNumber, msAgo)`,
+   which shifts a quarter's `game_quarter.start_time` and all of that game's
+   `player_activity` rows back by the same delta — used wherever a test
+   needs to simulate a quarter having timed out without actually waiting 10
+   minutes. The quarter must already be open (someone clocked in during it)
+   before this is called.
 5. Nothing is manually cleaned up between tests — each file's database is
    thrown away (`fs.rmSync`) in `test.after`, and within a file, tests create
    their own uniquely-named users/teams/players/games so they don't collide.
@@ -118,8 +120,14 @@ bugs — none of which a mocked unit test would have caught.
 ### 5. Games — `games.test.js`
 - Every game-management endpoint requires authentication.
 - Creating a game validates location/date and requires team access; defaults
-  the name to "Soccer Match"; new games start with `is_active = 1` and
-  `start_time = null`.
+  the name to "Soccer Match"; new games start paused (`is_active = 0`,
+  `current_quarter = 1`, `finished_at = null`) — see the "Game Start"
+  feature and the quarters section below.
+- **Game Start**: a freshly created (paused) game rejects clock-ins with 409
+  until `PUT /api/game/:gameId/status {isActive: true}` activates it —
+  dragging players onto the field before that point must never start
+  tracking their play time. Once activated, the first real clock-in opens
+  quarter 1's `game_quarter` row.
 - The games list is scoped to the caller's teams (with and without an
   explicit `teamId`) and the `archived` filter works.
 - Editing a game (`PUT /api/games/:gameId`) validates its fields, requires
@@ -143,14 +151,15 @@ bugs — none of which a mocked unit test would have caught.
   on the field before pausing and one added to the field during the pause
   can be clocked in for real.
 - **Timeout-status regression test**: the games list (`GET /api/games`)
-  reflects a timed-out game as ended even when nobody has ever loaded that
-  game's own page. `GET /api/game/:gameId` and `GET /api/players/:gameId`
-  both apply timeout enforcement before responding, but the list endpoint
-  originally just returned whatever `is_active` was already stored — so a
-  game could time out and still show "Active" in Game History until someone
-  happened to open it directly. The test creates a game, times it out via
-  `rewindGameStartTime`, and asserts against the list endpoint only, never
-  touching the individual game's endpoints, to make sure this can't regress.
+  reflects a timed-out quarter as paused even when nobody has ever loaded
+  that game's own page. `GET /api/game/:gameId` and `GET /api/players/:gameId`
+  both apply quarter timeout enforcement before responding, but the list
+  endpoint originally just returned whatever `is_active` was already
+  stored — so a game's quarter could time out and it would still show
+  "Active" in Game History until someone happened to open it directly. The
+  test creates a game, times out quarter 1 via `rewindQuarterStartTime`,
+  and asserts against the list endpoint only, never touching the individual
+  game's endpoints, to make sure this can't regress.
 
 ### 6. Player clock-in/clock-out segments — `segments.test.js`
 - `POST /api/segments` requires authentication and validates `playerId` /
@@ -198,25 +207,51 @@ feature built on top of it.
   total, mirroring how `cumulativeSeconds` already excludes archived-game
   playtime.
 
-### 8. Game timeout (1-hour auto-end) — `game-timeout.test.js`
-- `isGameTimedOut` as a pure boundary function.
-- `start_time` lifecycle: `null` on creation, stamped by the first player to
-  take the field, unchanged by subsequent players.
-- A game past the 1-hour limit auto-closes every active player and flips
-  `is_active` to 0 the next time anyone fetches it; new players are then
-  rejected (409) and the game cannot be resumed (409).
-- **Play-time cap regression test**: recorded play time can never exceed the
-  game's 1-hour limit even when enforcement runs long after the boundary
-  (simulated by pushing `start_time` back by the limit *plus 20 hours* and
-  confirming credited time still caps at ~1 hour, not ~21). This reproduces
-  the exact bug reported in production, where a game that timed out
-  overnight credited a player 1200+ minutes because the close-out row was
-  timestamped whenever someone next loaded the page rather than at the
-  actual 1-hour mark.
-- **Isolation**: timing out one game never touches a sibling game on the
-  same team, nor a different team's game or players — verified at the
-  `is_active` level, the `inStage` level, and the raw `player_activity` row
-  count (no stray close-out row leaks into an unrelated game).
+### 8. Quarters (10-minute auto-end, "End Quarter", full-game lifecycle) — `quarters.test.js`
+A soccer game here is 4 quarters of 10 minutes each, tracked in the
+`game_quarter` table (one row per quarter a game has actually started,
+created on that quarter's first clock-in, closed out — by timeout or the
+"End Quarter" button — with an `end_time`). `games.current_quarter` tracks
+which quarter a game is on; `games.finished_at` is set once quarter 4 ends,
+and is the one true "this game is over" signal — a single quarter timing
+out is *not* that, it just advances to the next quarter.
+- `isQuarterTimedOut` as a pure boundary function of a quarter's
+  `start_time` and the 10-minute limit.
+- Quarter lifecycle: no `game_quarter` row exists until someone is clocked
+  in; the first clock-in opens quarter 1's row; a second clock-in in the
+  same quarter does not open a second row.
+- A quarter past its 10-minute limit auto-closes every active player and
+  advances `current_quarter` to the next one the next time anyone fetches
+  the game — **unlike** the old single-timeout design, this is not a
+  terminal state: `PUT .../status {isActive: true}` immediately succeeds
+  again to start the next quarter, and a subsequent clock-in opens that
+  quarter's own row.
+- **Play-time cap regression test**: recorded play time can never exceed a
+  quarter's 10-minute limit even when enforcement runs long after the
+  boundary (simulated by pushing the quarter's `start_time` back by the
+  limit *plus 20 hours* and confirming credited time still caps at ~10
+  minutes, not ~20 hours). This is the same class of bug this suite once
+  caught for the old 1-hour design, now guarded at the quarter level.
+- **Isolation**: timing out one game's quarter never touches a sibling game
+  on the same team, nor a different team's game or players — verified at
+  the `is_active` level, the `inStage` level, and the raw `player_activity`
+  row count (no stray close-out row leaks into an unrelated game).
+- **`POST /api/game/:gameId/end-quarter`** ("End Quarter" button): requires
+  authentication, team access, and an unfinished game; requires a quarter
+  actually be in progress (`is_active = 1`) — 409 otherwise, both for a
+  paused/not-yet-started game and for a game that has already finished. A
+  started-but-empty quarter (nobody clocked in yet) can still be ended —
+  there's just nothing to close out. Ending immediately after a clock-in
+  records only a few seconds of play time, not the full 10 minutes —
+  confirming the same `min(now, boundary)` capping logic that protects
+  against *late* enforcement doesn't cap an *early*, manual end down to
+  zero either.
+- **Full-game regression test**: drives a game through all 4 quarters via
+  `PUT .../status` + `POST .../end-quarter`, asserting `current_quarter`
+  advances 1→2→3→4 (and does not advance past 4) and `finished_at` stays
+  `null` until quarter 4 ends. Once finished, resuming, clocking a player
+  in, and ending a(nother) quarter are all rejected with 409, and every
+  quarter row has an `end_time`.
 
 ### 9. Profile — `profile.test.js`
 - Profile endpoints require authentication.
@@ -229,7 +264,7 @@ feature built on top of it.
 This file exists specifically so authorization regressions can't hide inside
 a single feature file. It doesn't test business logic — every other file
 does that — it tests the authorization *gate* in front of it, as one matrix:
-- Every data-bearing API endpoint (the full list, ~23 routes) rejects a
+- Every data-bearing API endpoint (the full list, ~24 routes) rejects a
   request carrying no session cookie at all with 401.
 - A logged-in user with **zero** team memberships is refused (403) on every
   team-scoped read and write for a team they don't belong to.
@@ -282,7 +317,12 @@ before shipping.
   field while paused without it becoming real play time until Resume — is
   entirely a `public/app.js` variable with no corresponding server state,
   so only the server-side contract it depends on (covered in the Games
-  section above) is tested, not the client's bookkeeping itself. All of
+  section above) is tested, not the client's bookkeeping itself. The same
+  applies to the quarter progress bar under the field (`renderQuarterProgress`
+  /`getQuarterState`, which turns `game.quarters` + `current_quarter` +
+  `isGameActive` into upcoming/active/paused/completed segments) and the
+  "End Quarter" button's confirmation popup — both are pure client rendering
+  and gating on top of already-tested endpoints. All of
   these were verified manually during development but are not part of
   `npm test` — a regression here would only be caught by manual testing or
   by adding a browser-driven suite (e.g. Playwright) alongside this one.
@@ -291,11 +331,12 @@ before shipping.
   (rendering, event wiring, `fetch` polyfill gaps) in Safari/Firefox/older
   Chrome are not caught. Spot-check manually, especially on Safari given this
   app's iPhone-heavy user base.
-- **True elapsed-time behavior.** The 1-hour timeout is tested by rewriting
-  `start_time` in the database, not by actually waiting an hour. This proves
-  the enforcement *logic* is correct but never proves the real-time interval
-  itself is exactly 3600 seconds end-to-end in a live deployment (clock
-  drift, server timezone misconfiguration, etc.).
+- **True elapsed-time behavior.** The 10-minute quarter timeout is tested by
+  rewriting a `game_quarter` row's `start_time` in the database, not by
+  actually waiting 10 minutes. This proves the enforcement *logic* is
+  correct but never proves the real-time interval itself is exactly 600
+  seconds end-to-end in a live deployment (clock drift, server timezone
+  misconfiguration, etc.).
 - **True concurrency / race conditions.** Tests issue requests sequentially
   per scenario. Two real users clocking the same player in at the exact same
   instant, or two browser tabs both submitting a game edit, could race in

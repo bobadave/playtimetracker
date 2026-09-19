@@ -240,6 +240,35 @@ button, input {
   transform: none;
 }
 
+.end-quarter-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d7b6bb;
+  border-radius: 12px;
+  background: #fff5f5;
+  color: #8a2831;
+  padding: 10px 16px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.end-quarter-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: #ffe9ea;
+}
+
+.end-quarter-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.end-quarter-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .game-countdown-wrap {
   display: flex;
   flex-direction: column;
@@ -248,7 +277,7 @@ button, input {
 }
 
 .game-countdown-label {
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -256,8 +285,9 @@ button, input {
 }
 
 .game-countdown {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 60px;
+  line-height: 1;
+  font-weight: 800;
   color: #e6949b;
   font-variant-numeric: tabular-nums;
 }
@@ -1134,16 +1164,6 @@ h1 {
   border-bottom: 1px solid var(--line);
 }
 
-.badge {
-  background: rgba(31, 157, 98, 0.12);
-  color: var(--green-dark);
-  border: 1px solid rgba(31, 157, 98, 0.15);
-  border-radius: 999px;
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .player-list {
   display: flex;
   flex-direction: column;
@@ -1358,6 +1378,47 @@ h1 {
 .stage.is-empty {
   align-items: center;
   justify-content: center;
+}
+
+.quarter-progress {
+  display: flex;
+  gap: 8px;
+  padding: 14px 20px 20px;
+}
+
+.quarter-segment {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #f3f6fb;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.quarter-segment--active {
+  background: rgba(31, 157, 98, 0.14);
+  border-color: rgba(31, 157, 98, 0.4);
+  color: var(--green-dark);
+  box-shadow: 0 0 0 2px rgba(31, 157, 98, 0.12);
+}
+
+.quarter-segment--paused {
+  background: rgba(240, 180, 41, 0.18);
+  border-color: rgba(240, 180, 41, 0.45);
+  color: #8a5a00;
+}
+
+.quarter-segment--completed {
+  background: var(--green);
+  border-color: var(--green);
+  color: #ffffff;
 }
 
 .empty-state {

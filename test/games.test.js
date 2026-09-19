@@ -11,9 +11,9 @@ const {
   createGame,
   putOnField,
   takeOffField,
-  rewindGameStartTime
+  rewindQuarterStartTime
 } = require('./helpers');
-const { GAME_TIME_LIMIT_MS } = require('../src/server');
+const { QUARTER_TIME_LIMIT_MS } = require('../src/server');
 
 test.before(async () => {
   await startTestServer();
@@ -67,10 +67,11 @@ test('creating a game requires location and a valid date, and requires access to
   const { game } = await created.json();
   assert.equal(game.name, 'Soccer Match', 'an unspecified name should default to "Soccer Match"');
   assert.equal(Number(game.is_active), 0, 'new games start paused, not active — see the "Game Start" feature');
-  assert.equal(game.start_time, null);
+  assert.equal(game.current_quarter, 1);
+  assert.equal(game.finished_at, null);
 });
 
-test('a newly created game starts paused: clock-ins are rejected until "Game Start" activates it, which then stamps start_time', async () => {
+test('a newly created game starts paused: clock-ins are rejected until "Game Start" activates it, which then opens quarter 1', async () => {
   const { cookie } = await registerAndLogIn('GameStartOwner');
   const fetchAs = authedFetch(cookie);
   const team = await createTeam(fetchAs, 'Game Start Team');
@@ -103,7 +104,9 @@ test('a newly created game starts paused: clock-ins are rejected until "Game Sta
   assert.equal(clockInAfterStart.status, 201, 'once "Game Start" activates the game, clock-ins succeed');
 
   const gameAfterStart = await (await fetchAs(`/api/game/${game.id}`)).json();
-  assert.ok(gameAfterStart.game.start_time, 'the first real clock-in after starting should stamp start_time');
+  assert.equal(gameAfterStart.game.quarters.length, 1, 'the first real clock-in after starting should open quarter 1');
+  assert.equal(gameAfterStart.game.quarters[0].quarter_number, 1);
+  assert.ok(gameAfterStart.game.quarters[0].start_time);
 });
 
 test('the games list is scoped to the caller\'s teams and the archived filter works', async () => {
@@ -136,11 +139,11 @@ test('the games list is scoped to the caller\'s teams and the archived filter wo
   assert.ok(!outsiderUnscoped.games.map((g) => g.id).includes(activeGame.id), 'a user with no teams in common must not see another team\'s games');
 });
 
-test('the games list reflects a timed-out game as ended even if nobody has loaded that game\'s own page yet', async () => {
+test('the games list reflects a timed-out quarter as paused even if nobody has loaded that game\'s own page yet', async () => {
   // Regression test: GET /api/games used to return whatever is_active happened to
-  // already be stored in the database, without applying the same 1-hour timeout
-  // enforcement that GET /api/game/:gameId and GET /api/players/:gameId apply.
-  // A game could time out and still show as "Active" in the Game History list
+  // already be stored in the database, without applying the same timeout enforcement
+  // that GET /api/game/:gameId and GET /api/players/:gameId apply. A game's quarter
+  // could time out and it would still show as "Active" in the Game History list
   // until someone specifically opened that game's own page.
   const { cookie } = await registerAndLogIn('GamesListTimeoutOwner');
   const fetchAs = authedFetch(cookie);
@@ -149,13 +152,14 @@ test('the games list reflects a timed-out game as ended even if nobody has loade
   const game = await createGame(fetchAs, team.id, 'Timeout Field');
 
   await putOnField(fetchAs, player.id, game.id);
-  await rewindGameStartTime(game.id, GAME_TIME_LIMIT_MS + 60 * 60 * 1000);
+  await rewindQuarterStartTime(game.id, 1, QUARTER_TIME_LIMIT_MS + 60 * 1000);
 
   // Deliberately go straight to the list endpoint — never touch /api/game/:gameId
   // or /api/players/:gameId, which is what previously masked this bug.
   const listResponse = await (await fetchAs(`/api/games?teamId=${team.id}`)).json();
   const listedGame = listResponse.games.find((g) => g.id === game.id);
-  assert.equal(Number(listedGame.is_active), 0, 'a timed-out game must show as ended in the games list, not still active');
+  assert.equal(Number(listedGame.is_active), 0, 'a game whose quarter timed out must show as paused in the games list, not still active');
+  assert.equal(listedGame.current_quarter, 2, 'it should have advanced to quarter 2');
 
   // The underlying player should also have been closed out as a side effect.
   const players = await (await fetchAs(`/api/players/${game.id}?teamId=${team.id}`)).json();

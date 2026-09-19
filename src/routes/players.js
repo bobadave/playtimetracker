@@ -3,7 +3,7 @@ const db = require('../db');
 const { DEFAULT_GAME_ID, DEFAULT_TEAM_ID } = require('../config');
 const { getSessionUserId } = require('../lib/session');
 const { resolveTeamId, userHasTeamAccess } = require('../lib/teams');
-const { resolveGameId, enforceGameTimeLimit } = require('../lib/gameTime');
+const { resolveGameId, enforceQuarterTimeLimit } = require('../lib/gameTime');
 const { getActivitySummaryMap, getCumulativeSummaryMap } = require('../lib/activity');
 const { getGoalCountMap, getCumulativeGoalMap } = require('../lib/goals');
 
@@ -169,7 +169,7 @@ router.get('/api/players/:gameId', async (req, res) => {
   }
 
   const game = await db.get('SELECT * FROM games WHERE id = ?', [gameId]);
-  await enforceGameTimeLimit(game);
+  await enforceQuarterTimeLimit(game);
 
   const players = await db.all('SELECT * FROM players WHERE team_id = ? AND archive = 0 ORDER BY id ASC', [teamId]);
 

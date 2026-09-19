@@ -46,17 +46,18 @@
             <div class="stage-header-left">
               <h2>On Field</h2>
               <button id="game-toggle-btn" class="game-toggle-btn" type="button">Game End</button>
+              <button id="end-quarter-btn" class="end-quarter-btn" type="button" hidden>End Quarter</button>
               <div id="game-countdown-wrap" class="game-countdown-wrap" hidden>
                 <span class="game-countdown-label">Time left</span>
                 <span id="game-countdown" class="game-countdown"></span>
               </div>
             </div>
-            <span class="badge">Drag players here</span>
           </div>
           <div id="scoreboard" class="scoreboard hidden" aria-live="polite"></div>
           <div id="stage" class="stage" aria-label="Game stage">
             <div class="empty-state">Drop players on to field to track play time.</div>
           </div>
+          <div id="quarter-progress" class="quarter-progress" aria-label="Quarter progress"></div>
         </section>
       </main>
     </div>

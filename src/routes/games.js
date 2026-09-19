@@ -3,7 +3,14 @@ const db = require('../db');
 const { DEFAULT_GAME_ID, DEFAULT_TEAM_ID } = require('../config');
 const { getSessionUserId } = require('../lib/session');
 const { resolveTeamId, userHasTeamAccess, getCurrentUserTeamIds } = require('../lib/teams');
-const { resolveGameId, isGameTimedOut, closeOutActivePlayers, enforceGameTimeLimit } = require('../lib/gameTime');
+const {
+  resolveGameId,
+  isGameFinished,
+  closeOutActivePlayers,
+  enforceQuarterTimeLimit,
+  endCurrentQuarter,
+  getQuarterRows
+} = require('../lib/gameTime');
 
 const router = express.Router();
 
@@ -39,8 +46,9 @@ router.get('/api/game/:gameId', async (req, res) => {
     return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
-  const enforcedGame = await enforceGameTimeLimit(game);
-  res.json({ game: enforcedGame });
+  const enforcedGame = await enforceQuarterTimeLimit(game);
+  const quarters = await getQuarterRows(gameId);
+  res.json({ game: { ...enforcedGame, quarters } });
 });
 
 router.get('/api/games', async (req, res) => {
@@ -83,12 +91,12 @@ router.get('/api/games', async (req, res) => {
     params
   );
 
-  // A game can time out without anyone ever loading its individual page (which is
-  // otherwise what triggers enforcement) — apply the same check here so the list
-  // never shows a timed-out game as still "Active".
+  // A quarter can time out without anyone ever loading the game's individual page
+  // (which is otherwise what triggers enforcement) — apply the same check here so the
+  // list never shows a game as still "Active" once its current quarter has timed out.
   const enforcedGames = [];
   for (const game of games) {
-    enforcedGames.push(await enforceGameTimeLimit(game));
+    enforcedGames.push(await enforceQuarterTimeLimit(game));
   }
 
   return res.json({ games: enforcedGames });
@@ -160,7 +168,7 @@ router.put('/api/game/status', async (req, res) => {
     return res.status(400).json({ message: 'isActive is required.' });
   }
 
-  const game = await db.get('SELECT * FROM games WHERE id = ?', [resolvedGameId]);
+  let game = await db.get('SELECT * FROM games WHERE id = ?', [resolvedGameId]);
   if (!game) {
     return res.status(404).json({ message: 'Game not found.' });
   }
@@ -169,18 +177,23 @@ router.put('/api/game/status', async (req, res) => {
     return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
-  if (isActive && isGameTimedOut(game)) {
-    return res.status(409).json({ message: 'This game has already ended and cannot be resumed.' });
+  game = await enforceQuarterTimeLimit(game);
+
+  if (isActive && isGameFinished(game)) {
+    return res.status(409).json({ message: 'This game has already finished and cannot be resumed.' });
   }
 
   if (!isActive) {
-    await closeOutActivePlayers(resolvedGameId, game);
+    // Pausing mid-quarter only stops individual players' clocks — it does not end the
+    // quarter itself, so there's no boundary to cap against, just "now".
+    await closeOutActivePlayers(resolvedGameId, new Date().toISOString());
   }
 
   await db.run('UPDATE games SET is_active = ? WHERE id = ?', [isActive ? 1 : 0, resolvedGameId]);
   const updatedGame = await db.get('SELECT * FROM games WHERE id = ?', [resolvedGameId]);
+  const quarters = await getQuarterRows(resolvedGameId);
 
-  return res.json({ game: updatedGame });
+  return res.json({ game: { ...updatedGame, quarters } });
 });
 
 router.put('/api/game/:gameId/status', async (req, res) => {
@@ -196,7 +209,7 @@ router.put('/api/game/:gameId/status', async (req, res) => {
     return res.status(400).json({ message: 'isActive is required.' });
   }
 
-  const game = await db.get('SELECT * FROM games WHERE id = ?', [gameId]);
+  let game = await db.get('SELECT * FROM games WHERE id = ?', [gameId]);
   if (!game) {
     return res.status(404).json({ message: 'Game not found.' });
   }
@@ -205,18 +218,57 @@ router.put('/api/game/:gameId/status', async (req, res) => {
     return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
-  if (isActive && isGameTimedOut(game)) {
-    return res.status(409).json({ message: 'This game has already ended and cannot be resumed.' });
+  game = await enforceQuarterTimeLimit(game);
+
+  if (isActive && isGameFinished(game)) {
+    return res.status(409).json({ message: 'This game has already finished and cannot be resumed.' });
   }
 
   if (!isActive) {
-    await closeOutActivePlayers(gameId, game);
+    await closeOutActivePlayers(gameId, new Date().toISOString());
   }
 
   await db.run('UPDATE games SET is_active = ? WHERE id = ?', [isActive ? 1 : 0, gameId]);
   const updatedGame = await db.get('SELECT * FROM games WHERE id = ?', [gameId]);
+  const quarters = await getQuarterRows(gameId);
 
-  return res.json({ game: updatedGame });
+  return res.json({ game: { ...updatedGame, quarters } });
+});
+
+// Immediately ends whichever quarter is currently in progress, without waiting for its
+// 10-minute limit — used by the "End Quarter" button. Shares the exact same
+// end-of-quarter logic (close out active players, advance to the next quarter or mark
+// the game finished) as automatic timeout enforcement.
+router.post('/api/game/:gameId/end-quarter', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
+  const gameId = resolveGameId(req.params.gameId);
+  let game = await db.get('SELECT * FROM games WHERE id = ?', [gameId]);
+  if (!game) {
+    return res.status(404).json({ message: 'Game not found.' });
+  }
+
+  if (!(await userHasTeamAccess(currentUserId, game.team_id))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
+  game = await enforceQuarterTimeLimit(game);
+
+  if (isGameFinished(game)) {
+    return res.status(409).json({ message: 'This game has already finished.' });
+  }
+
+  if (Number(game.is_active) !== 1) {
+    return res.status(409).json({ message: 'No quarter is currently in progress.' });
+  }
+
+  const updatedGame = await endCurrentQuarter(game);
+  const quarters = await getQuarterRows(gameId);
+
+  return res.json({ game: { ...updatedGame, quarters } });
 });
 
 router.put('/api/games/unarchive', async (req, res) => {
@@ -245,7 +297,7 @@ router.put('/api/games/:gameId', async (req, res) => {
   }
 
   const gameId = resolveGameId(req.params.gameId);
-  const game = await db.get('SELECT * FROM games WHERE id = ?', [gameId]);
+  let game = await db.get('SELECT * FROM games WHERE id = ?', [gameId]);
   if (!game) {
     return res.status(404).json({ message: 'Game not found.' });
   }
@@ -273,8 +325,14 @@ router.put('/api/games/:gameId', async (req, res) => {
     return res.status(400).json({ message: 'isActive is required.' });
   }
 
+  game = await enforceQuarterTimeLimit(game);
+
+  if (isActive && isGameFinished(game)) {
+    return res.status(409).json({ message: 'This game has already finished and cannot be resumed.' });
+  }
+
   if (!isActive) {
-    await closeOutActivePlayers(gameId, game);
+    await closeOutActivePlayers(gameId, new Date().toISOString());
   }
 
   await db.run(

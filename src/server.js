@@ -5,7 +5,13 @@ const session = require('express-session');
 const db = require('./db');
 const { PORT, IS_PRODUCTION } = require('./config');
 
-const { resolveGameId, isGameTimedOut, GAME_TIME_LIMIT_MS } = require('./lib/gameTime');
+const {
+  resolveGameId,
+  isGameFinished,
+  isQuarterTimedOut,
+  QUARTER_TIME_LIMIT_MS,
+  TOTAL_QUARTERS
+} = require('./lib/gameTime');
 const { resolveTeamId } = require('./lib/teams');
 const {
   summarizeActivityRows,
@@ -81,6 +87,8 @@ module.exports = {
   getCumulativeSummaryMap,
   getGoalCountMap,
   startServer,
-  isGameTimedOut,
-  GAME_TIME_LIMIT_MS
+  isGameFinished,
+  isQuarterTimedOut,
+  QUARTER_TIME_LIMIT_MS,
+  TOTAL_QUARTERS
 };

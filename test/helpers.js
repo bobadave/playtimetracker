@@ -168,13 +168,22 @@ function removeLastGoal(fetchAs, playerId, gameId) {
   });
 }
 
-// Shifts a game's start_time AND every existing player_activity row for that game
-// back by the same delta, so the whole session (clock-ins included) is consistently
-// simulated as having happened `msAgo` in the past — not just the start_time column.
-// Used to simulate a game timing out without waiting a real hour.
-async function rewindGameStartTime(gameId, msAgo) {
-  const game = await db.get('SELECT start_time FROM games WHERE id = ?', [gameId]);
-  const currentStartMs = new Date(game.start_time).getTime();
+// Shifts a quarter's game_quarter.start_time AND every existing player_activity row
+// for that game back by the same delta, so the whole session (clock-ins included) is
+// consistently simulated as having happened `msAgo` in the past — not just the
+// game_quarter row. Used to simulate a quarter timing out without waiting 10 real
+// minutes. The quarter must already be open (i.e. someone has been clocked in during
+// it — see putOnField) before this is called.
+async function rewindQuarterStartTime(gameId, quarterNumber, msAgo) {
+  const quarter = await db.get(
+    'SELECT * FROM game_quarter WHERE game_id = ? AND quarter_number = ? AND end_time IS NULL',
+    [gameId, quarterNumber]
+  );
+  if (!quarter) {
+    throw new Error(`rewindQuarterStartTime: no open quarter ${quarterNumber} for game ${gameId}`);
+  }
+
+  const currentStartMs = new Date(quarter.start_time).getTime();
   const newStartMs = Date.now() - msAgo;
   const deltaMs = newStartMs - currentStartMs;
 
@@ -184,7 +193,7 @@ async function rewindGameStartTime(gameId, msAgo) {
     await db.run('UPDATE player_activity SET timestamp = ? WHERE id = ?', [shifted, row.id]);
   }
 
-  await db.run('UPDATE games SET start_time = ? WHERE id = ?', [new Date(newStartMs).toISOString(), gameId]);
+  await db.run('UPDATE game_quarter SET start_time = ? WHERE id = ?', [new Date(newStartMs).toISOString(), quarter.id]);
 }
 
 module.exports = {
@@ -202,5 +211,5 @@ module.exports = {
   takeOffField,
   logGoal,
   removeLastGoal,
-  rewindGameStartTime
+  rewindQuarterStartTime
 };

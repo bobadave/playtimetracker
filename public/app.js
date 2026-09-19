@@ -13,18 +13,31 @@ const gameNameDisplayEl = document.getElementById('game-name-display');
 const teamNameDisplayEl = document.getElementById('team-name-display');
 const gameMetaDisplayEl = document.getElementById('game-meta-display');
 const gameToggleBtn = document.getElementById('game-toggle-btn');
+const endQuarterBtn = document.getElementById('end-quarter-btn');
 const gameCountdownWrapEl = document.getElementById('game-countdown-wrap');
 const gameCountdownEl = document.getElementById('game-countdown');
+const quarterProgressEl = document.getElementById('quarter-progress');
 const gameFormEl = document.getElementById('game-form');
 let isGameActive = true;
-let isGameTimedOut = false;
-let gameHasStarted = false;
+// True only once all 4 quarters have finished (the game's terminal state) — a single
+// quarter timing out just advances to the next one and is not this.
+let isGameFinished = false;
+let currentQuarterNumber = 1;
+// Whether the CURRENT quarter has an open game_quarter row (i.e. someone has been
+// clocked in during it) — distinguishes "Game Resume" (already opened, just paused)
+// from "Nth Quarter Start" (hasn't opened yet).
+let currentQuarterHasOpened = false;
 let latestPlayers = [];
 let lastPlayersFetchMs = Date.now();
 let pausedFieldPlayerIds = new Set();
-const GAME_TIME_LIMIT_MS = 60 * 60 * 1000;
-let gameStartTimeMs = null;
+const QUARTER_TIME_LIMIT_MS = 10 * 60 * 1000;
+const QUARTER_ORDINALS = ['1st', '2nd', '3rd', '4th'];
+let quarterStartTimeMs = null;
 let countdownIntervalId = null;
+
+function getQuarterOrdinal(quarterNumber) {
+  return QUARTER_ORDINALS[quarterNumber - 1] || `${quarterNumber}th`;
+}
 
 function formatCountdown(remainingMs) {
   const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
@@ -34,11 +47,11 @@ function formatCountdown(remainingMs) {
 }
 
 function updateCountdownDisplay() {
-  if (!Number.isFinite(gameStartTimeMs)) {
+  if (!Number.isFinite(quarterStartTimeMs)) {
     return;
   }
 
-  const remainingMs = gameStartTimeMs + GAME_TIME_LIMIT_MS - Date.now();
+  const remainingMs = quarterStartTimeMs + QUARTER_TIME_LIMIT_MS - Date.now();
   gameCountdownEl.textContent = formatCountdown(remainingMs);
 
   if (remainingMs <= 0 && countdownIntervalId) {
@@ -217,6 +230,37 @@ function attachDragHandlers(card, playerId) {
   });
 }
 
+function getQuarterState(quarterNumber, game, quarterRow) {
+  if (quarterRow && quarterRow.end_time) {
+    return 'completed';
+  }
+
+  if (quarterNumber === currentQuarterNumber && !isGameFinished) {
+    if (isGameActive) {
+      return 'active';
+    }
+
+    return quarterRow ? 'paused' : 'upcoming';
+  }
+
+  return 'upcoming';
+}
+
+function renderQuarterProgress(game) {
+  const quarters = (game && game.quarters) || [];
+
+  quarterProgressEl.innerHTML = [1, 2, 3, 4].map((quarterNumber) => {
+    const quarterRow = quarters.find((q) => q.quarter_number === quarterNumber);
+    const state = getQuarterState(quarterNumber, game, quarterRow);
+
+    return `
+      <div class="quarter-segment quarter-segment--${state}">
+        <span class="quarter-segment-label">Q${quarterNumber}</span>
+      </div>
+    `;
+  }).join('');
+}
+
 function renderGameHeader(game) {
   const gameId = game && game.id ? game.id : '--';
   const gameName = game && game.name ? game.name : 'Untitled Game';
@@ -229,33 +273,38 @@ function renderGameHeader(game) {
   gameIdDisplayEl.textContent = `Game ID: ${gameId}`;
   gameMetaDisplayEl.textContent = `Location: ${location} • ${date}`;
   isGameActive = !!(game && Number(game.is_active) !== 0);
+  isGameFinished = !!(game && game.finished_at);
+  currentQuarterNumber = (game && Number(game.current_quarter)) || 1;
 
-  const startTimeMs = game && game.start_time ? new Date(game.start_time).getTime() : null;
-  isGameTimedOut = Number.isFinite(startTimeMs) && Date.now() - startTimeMs > GAME_TIME_LIMIT_MS;
+  const quarters = (game && game.quarters) || [];
+  const openQuarter = quarters.find((q) => q.quarter_number === currentQuarterNumber && !q.end_time);
+  currentQuarterHasOpened = !!openQuarter;
+  const openQuarterStartMs = openQuarter ? new Date(openQuarter.start_time).getTime() : null;
 
-  if (isGameTimedOut) {
+  if (isGameFinished) {
     gameToggleBtn.textContent = 'Game Ended';
     gameToggleBtn.disabled = true;
     gameToggleBtn.classList.remove('resume');
     gameToggleBtn.classList.add('ended');
     gameToggleBtn.setAttribute('aria-pressed', 'true');
   } else {
-    // A game with no start_time yet has never actually had a player clocked in —
-    // whether because it's brand new or was paused before anyone ever took the
-    // field — so the un-pause action reads as "Start" rather than "Resume".
-    gameHasStarted = Number.isFinite(startTimeMs);
     gameToggleBtn.disabled = false;
     gameToggleBtn.classList.remove('ended');
-    gameToggleBtn.textContent = isGameActive ? 'Game Pause' : (gameHasStarted ? 'Game Resume' : 'Game Start');
+    gameToggleBtn.textContent = isGameActive
+      ? 'Game Pause'
+      : (currentQuarterHasOpened ? 'Game Resume' : `${getQuarterOrdinal(currentQuarterNumber)} Quarter Start`);
     gameToggleBtn.classList.toggle('resume', !isGameActive);
     gameToggleBtn.setAttribute('aria-pressed', String(!isGameActive));
   }
 
-  stageEl.classList.toggle('disabled', isGameTimedOut);
-  stageEl.setAttribute('aria-disabled', String(isGameTimedOut));
+  endQuarterBtn.hidden = false;
+  endQuarterBtn.disabled = !isGameActive;
 
-  const shouldShowCountdown = isGameActive && !isGameTimedOut && Number.isFinite(startTimeMs);
-  gameStartTimeMs = shouldShowCountdown ? startTimeMs : null;
+  stageEl.classList.toggle('disabled', isGameFinished);
+  stageEl.setAttribute('aria-disabled', String(isGameFinished));
+
+  const shouldShowCountdown = isGameActive && !isGameFinished && Number.isFinite(openQuarterStartMs);
+  quarterStartTimeMs = shouldShowCountdown ? openQuarterStartMs : null;
   gameCountdownWrapEl.hidden = !shouldShowCountdown;
 
   if (shouldShowCountdown) {
@@ -267,6 +316,8 @@ function renderGameHeader(game) {
     clearInterval(countdownIntervalId);
     countdownIntervalId = null;
   }
+
+  renderQuarterProgress(game);
 }
 
 function showGoalPopup() {
@@ -340,12 +391,13 @@ function renderPlayers(players) {
 
   if (stagePlayers.length === 0) {
     stageEl.classList.add('is-empty');
-    const isPaused = !isGameTimedOut && !isGameActive;
-    const emptyMessage = isGameTimedOut
+    const isPaused = !isGameFinished && !isGameActive;
+    const resumeLabel = currentQuarterHasOpened ? 'Game Resume' : `${getQuarterOrdinal(currentQuarterNumber)} Quarter Start`;
+    const emptyMessage = isGameFinished
       ? 'This game has ended.'
       : isGameActive
         ? 'Drop players on to field to track play time.'
-        : `Drop players on to field. Tracking ${gameHasStarted ? 'resumes' : 'starts'} when you hit Game ${gameHasStarted ? 'Resume' : 'Start'}.`;
+        : `Drop players on to field. Tracking ${currentQuarterHasOpened ? 'resumes' : 'starts'} when you hit ${resumeLabel}.`;
     stageEl.innerHTML = `<div class="empty-state${isPaused ? ' empty-state-paused' : ''}">${emptyMessage}</div>`;
   } else {
     stageEl.classList.remove('is-empty');
@@ -413,7 +465,7 @@ function renderPlayers(players) {
 }
 
 async function logPlayerActivity(playerId, inPlay) {
-  if (isGameTimedOut) {
+  if (isGameFinished) {
     return;
   }
 
@@ -539,10 +591,43 @@ async function toggleGameStatus() {
       await logPlayerActivity(playerId, true);
     }
     pausedFieldPlayerIds = new Set();
+
+    // The clock-ins above may have just opened this quarter's game_quarter row —
+    // refresh once more so the countdown and quarter progress bar aren't stale.
+    const refreshedGame = await fetchCurrentGame();
+    renderGameHeader(refreshedGame.game);
   }
 
   const players = await fetchPlayers();
   renderPlayers(players);
+}
+
+async function endCurrentQuarterAction() {
+  const gameId = getCurrentGameId();
+  const response = await fetch(`/api/game/${gameId}/end-quarter`, {
+    method: 'POST'
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    alert(errorData.message || 'Unable to end the quarter.');
+    return;
+  }
+
+  const gameData = await response.json();
+  renderGameHeader(gameData.game);
+
+  const players = await fetchPlayers();
+  renderPlayers(players);
+}
+
+async function handleEndQuarterClick() {
+  const confirmed = await showConfirmPopup(`End the ${getQuarterOrdinal(currentQuarterNumber)} quarter now?`);
+  if (!confirmed) {
+    return;
+  }
+
+  await endCurrentQuarterAction();
 }
 
 async function createGame(event) {
@@ -584,7 +669,7 @@ function setupDropZones() {
   // Field membership can be edited whenever the game hasn't permanently timed out —
   // including while paused, where changes are held as pending until Game Resume.
   const dragOver = (event) => {
-    if (isGameTimedOut) {
+    if (isGameFinished) {
       event.preventDefault();
       return;
     }
@@ -595,7 +680,7 @@ function setupDropZones() {
 
   stageEl.addEventListener('dragover', dragOver);
   playerListEl.addEventListener('dragover', (event) => {
-    if (isGameTimedOut) {
+    if (isGameFinished) {
       event.preventDefault();
       return;
     }
@@ -605,7 +690,7 @@ function setupDropZones() {
 
   stageEl.addEventListener('drop', (event) => {
     event.preventDefault();
-    if (isGameTimedOut) {
+    if (isGameFinished) {
       return;
     }
     const playerId = Number(event.dataTransfer.getData('text/plain'));
@@ -653,6 +738,7 @@ function setupDropZones() {
   confirmPopupNoBtn.addEventListener('click', () => resolveConfirmPopup(false));
 
   gameToggleBtn.addEventListener('click', toggleGameStatus);
+  endQuarterBtn.addEventListener('click', handleEndQuarterClick);
   if (gameFormEl) {
     gameFormEl.addEventListener('submit', createGame);
   }
@@ -764,7 +850,7 @@ function setupTouchDragAndDrop() {
     dragState.ghostEl.style.top = `${touch.clientY}px`;
 
     const target = document.elementFromPoint(touch.clientX, touch.clientY);
-    stageEl.classList.toggle('drag-target-active', Boolean(target && target.closest('#stage') && !isGameTimedOut));
+    stageEl.classList.toggle('drag-target-active', Boolean(target && target.closest('#stage') && !isGameFinished));
     playerListEl.classList.toggle('drag-target-active', Boolean(target && target.closest('#player-list')));
   }, { passive: false });
 

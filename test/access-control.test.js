@@ -34,6 +34,7 @@ test('every data-bearing API endpoint rejects a request with no session cookie a
     ['POST', '/api/games', { location: 'X', date: '2026-01-01', team_id: 1 }],
     ['PUT', '/api/game/status', { isActive: false, gameId: 1 }],
     ['PUT', '/api/game/1/status', { isActive: false }],
+    ['POST', '/api/game/1/end-quarter'],
     ['PUT', '/api/games/unarchive', { teamId: 1 }],
     ['PUT', '/api/games/1', { name: 'X', location: 'X', date: '2026-01-01', isActive: true }],
     ['PUT', '/api/games/1/archive', { archived: true }],

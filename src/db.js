@@ -76,7 +76,9 @@ function createDbApi(databasePath = dbPath) {
         date TEXT,
         is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
         archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
-        start_time TEXT
+        start_time TEXT,
+        current_quarter INTEGER NOT NULL DEFAULT 1 CHECK (current_quarter IN (1, 2, 3, 4)),
+        finished_at TEXT
       )
     `);
 
@@ -151,12 +153,28 @@ function createDbApi(databasePath = dbPath) {
       )
     `);
 
+    // One row per quarter a game has actually started (created on that quarter's first
+    // clock-in, closed out when the quarter ends — by timeout or the "End Quarter"
+    // button). At most one row per (game_id, quarter_number) is ever open at a time.
+    await run(`
+      CREATE TABLE IF NOT EXISTS game_quarter (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_id INTEGER NOT NULL,
+        quarter_number INTEGER NOT NULL CHECK (quarter_number IN (1, 2, 3, 4)),
+        start_time TEXT NOT NULL,
+        end_time TEXT,
+        FOREIGN KEY (game_id) REFERENCES games(id)
+      )
+    `);
+
     await ensureColumn('games', 'location', 'location TEXT');
     await ensureColumn('games', 'date', 'date TEXT');
     await ensureColumn('games', 'is_active', 'is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))');
     await ensureColumn('games', 'team_id', 'team_id INTEGER NOT NULL DEFAULT 1 REFERENCES teams(id)');
     await ensureColumn('games', 'archived', 'archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))');
     await ensureColumn('games', 'start_time', 'start_time TEXT');
+    await ensureColumn('games', 'current_quarter', 'current_quarter INTEGER NOT NULL DEFAULT 1 CHECK (current_quarter IN (1, 2, 3, 4))');
+    await ensureColumn('games', 'finished_at', 'finished_at TEXT');
 
     await ensureColumn('teams', 'team_name', 'team_name TEXT NOT NULL');
     await ensureColumn('teams', 'user_admin_id', 'user_admin_id INTEGER');

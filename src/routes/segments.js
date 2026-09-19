@@ -3,7 +3,7 @@ const db = require('../db');
 const { DEFAULT_GAME_ID } = require('../config');
 const { getSessionUserId } = require('../lib/session');
 const { userHasTeamAccess } = require('../lib/teams');
-const { resolveGameId, enforceGameTimeLimit } = require('../lib/gameTime');
+const { resolveGameId, enforceQuarterTimeLimit, getOpenQuarter } = require('../lib/gameTime');
 const { getPlayerSummary } = require('../lib/activity');
 
 const router = express.Router();
@@ -97,7 +97,7 @@ router.post('/api/segments', async (req, res) => {
     return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
-  game = await enforceGameTimeLimit(game);
+  game = await enforceQuarterTimeLimit(game);
 
   if (inPlay && Number(game.is_active) !== 1) {
     return res.status(409).json({ message: 'This game is not currently active and cannot accept players.' });
@@ -118,8 +118,17 @@ router.post('/api/segments', async (req, res) => {
 
   const timestamp = new Date().toISOString();
 
-  if (inPlay && !game.start_time) {
-    await db.run('UPDATE games SET start_time = ? WHERE id = ?', [timestamp, resolvedGameId]);
+  if (inPlay) {
+    // This is the first real clock-in of the current quarter — start its 10-minute
+    // clock now (mirrors how the old single-timeout game only started counting once
+    // someone actually took the field, not when "Start" was pressed).
+    const openQuarter = await getOpenQuarter(resolvedGameId, game.current_quarter);
+    if (!openQuarter) {
+      await db.run(
+        'INSERT INTO game_quarter (game_id, quarter_number, start_time) VALUES (?, ?, ?)',
+        [resolvedGameId, game.current_quarter, timestamp]
+      );
+    }
   }
 
   const result = await db.run(

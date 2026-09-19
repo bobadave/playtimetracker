@@ -48,26 +48,16 @@
       let currentGames = [];
       let editingGameId = null;
       const expandedGameIds = new Set();
-      const GAME_TIME_LIMIT_MS = 60 * 60 * 1000;
 
-      // A game only reaches "Ended" once its 1-hour timeout has actually elapsed.
-      // is_active = 0 by itself just means paused (or ended-early via the edit
-      // form below) — it can still be resumed.
-      function isGameTimedOut(game) {
-        if (!game || !game.start_time) {
-          return false;
-        }
-
-        const startMs = new Date(game.start_time).getTime();
-        return Number.isFinite(startMs) && Date.now() - startMs > GAME_TIME_LIMIT_MS;
-      }
-
+      // A game only reaches "Ended" once all 4 quarters have actually finished
+      // (finished_at is set by the server). is_active = 0 by itself just means
+      // paused between/within quarters — it can still be started/resumed.
       function getGameStatus(game) {
         if (Number(game.is_active) === 1) {
           return { label: 'Active', className: 'active' };
         }
 
-        if (isGameTimedOut(game)) {
+        if (game.finished_at) {
           return { label: 'Ended', className: 'ended' };
         }
 
