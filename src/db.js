@@ -146,12 +146,41 @@ function createDbApi(databasePath = dbPath) {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         game_id INTEGER NOT NULL,
         player_id INTEGER NOT NULL,
-        action TEXT NOT NULL CHECK (action IN ('goal')),
+        action TEXT NOT NULL CHECK (action IN ('goal', 'effort', 'spirit', 'improvement')),
+        value INTEGER NOT NULL DEFAULT 1 CHECK (value BETWEEN 1 AND 5),
         timestamp TEXT NOT NULL,
         FOREIGN KEY (game_id) REFERENCES games(id),
         FOREIGN KEY (player_id) REFERENCES players(id)
       )
     `);
+
+    // player_action originally only allowed action = 'goal' with no value column. SQLite
+    // cannot ALTER a CHECK constraint, so widening it to the point-based actions (effort,
+    // spirit, improvement) requires rebuilding the table on any database created before
+    // this change. Detected by the absence of the `value` column — fresh databases already
+    // get the widened CREATE TABLE above and skip this.
+    const playerActionColumns = await all('PRAGMA table_info(player_action)');
+    const hasValueColumn = playerActionColumns.some((column) => column.name === 'value');
+    if (!hasValueColumn) {
+      await run('ALTER TABLE player_action RENAME TO player_action_pre_value');
+      await run(`
+        CREATE TABLE player_action (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          game_id INTEGER NOT NULL,
+          player_id INTEGER NOT NULL,
+          action TEXT NOT NULL CHECK (action IN ('goal', 'effort', 'spirit', 'improvement')),
+          value INTEGER NOT NULL DEFAULT 1 CHECK (value BETWEEN 1 AND 5),
+          timestamp TEXT NOT NULL,
+          FOREIGN KEY (game_id) REFERENCES games(id),
+          FOREIGN KEY (player_id) REFERENCES players(id)
+        )
+      `);
+      await run(`
+        INSERT INTO player_action (id, game_id, player_id, action, value, timestamp)
+        SELECT id, game_id, player_id, action, 1, timestamp FROM player_action_pre_value
+      `);
+      await run('DROP TABLE player_action_pre_value');
+    }
 
     // One row per quarter a game has actually started (created on that quarter's first
     // clock-in, closed out when the quarter ends — by timeout or the "End Quarter"

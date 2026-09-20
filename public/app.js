@@ -8,6 +8,18 @@ const confirmPopupMessageEl = document.getElementById('confirm-popup-message');
 const confirmPopupYesBtn = document.getElementById('confirm-popup-yes');
 const confirmPopupNoBtn = document.getElementById('confirm-popup-no');
 let confirmPopupResolver = null;
+const starsPopupEl = document.getElementById('stars-popup');
+const starsPopupMessageEl = document.getElementById('stars-popup-message');
+const starsPopupActionEl = document.getElementById('stars-popup-action');
+const starsPopupStarsEl = document.getElementById('stars-popup-stars');
+const starsPopupErrorEl = document.getElementById('stars-popup-error');
+const starsPopupSubmitBtn = document.getElementById('stars-popup-submit');
+const starsPopupCancelBtn = document.getElementById('stars-popup-cancel');
+let starsPopupResolver = null;
+const starsExplosionEl = document.getElementById('stars-explosion');
+// Matches .popup-overlay's opacity/transform transition duration (0.3s) — the explosion
+// is timed to start only once the stars popup has fully faded out, not on top of it.
+const STARS_POPUP_FADE_MS = 300;
 const gameIdDisplayEl = document.getElementById('game-id-display');
 const gameNameDisplayEl = document.getElementById('game-name-display');
 const teamNameDisplayEl = document.getElementById('team-name-display');
@@ -349,20 +361,85 @@ function resolveConfirmPopup(result) {
   }
 }
 
-function renderScoreboard(players) {
-  const scorers = players.filter((player) => Number(player.goals) > 0);
+function showStarsPopup(playerName) {
+  return new Promise((resolve) => {
+    starsPopupResolver = resolve;
+    starsPopupMessageEl.textContent = `Log stars for ${playerName}`;
+    starsPopupActionEl.value = '';
+    starsPopupStarsEl.value = '1';
+    starsPopupErrorEl.classList.add('hidden');
+    starsPopupEl.classList.add('visible');
+  });
+}
 
-  if (scorers.length === 0) {
+function resolveStarsPopup(result) {
+  starsPopupEl.classList.remove('visible');
+  const resolve = starsPopupResolver;
+  starsPopupResolver = null;
+  if (resolve) {
+    resolve(result);
+  }
+}
+
+function showStarExplosion() {
+  starsExplosionEl.innerHTML = '';
+
+  const PARTICLE_COUNT = 12;
+  for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+    const particle = document.createElement('span');
+    particle.className = 'stars-explosion-particle';
+
+    const angle = (360 / PARTICLE_COUNT) * i + (Math.random() * 16 - 8);
+    const distance = 90 + Math.random() * 60;
+    const radians = (angle * Math.PI) / 180;
+    particle.style.setProperty('--dx', `${Math.cos(radians) * distance}px`);
+    particle.style.setProperty('--dy', `${Math.sin(radians) * distance}px`);
+    particle.style.setProperty('--rot', `${Math.random() * 360 - 180}deg`);
+    particle.style.animationDelay = `${Math.random() * 80}ms`;
+    particle.textContent = '★';
+
+    starsExplosionEl.appendChild(particle);
+  }
+
+  setTimeout(() => {
+    starsExplosionEl.innerHTML = '';
+  }, 1000);
+}
+
+const SCOREBOARD_CATEGORIES = [
+  { key: 'goals', label: 'Goals', action: 'goal', removeMode: 'last' },
+  { key: 'effort', label: 'Effort', action: 'effort', removeMode: 'all' },
+  { key: 'spirit', label: 'Spirit', action: 'spirit', removeMode: 'all' },
+  { key: 'improvement', label: 'Improvement', action: 'improvement', removeMode: 'all' }
+];
+
+function renderScoreboard(players) {
+  const rowsHtml = SCOREBOARD_CATEGORIES.map(({ key, label, action, removeMode }) => {
+    const tallied = players.filter((player) => Number(player[key]) > 0);
+    if (tallied.length === 0) {
+      return '';
+    }
+
+    const pills = tallied.map((player) => {
+      const value = player[key];
+      const isGoals = removeMode === 'last';
+      const pillClass = isGoals ? 'scorer-pill' : 'stars-tally-pill';
+      const countClass = isGoals ? 'scorer-count' : 'stars-tally-count';
+      const starHtml = isGoals ? '' : ` <span class="stars-tally-star" aria-hidden="true">★</span>`;
+      return `<button type="button" class="${pillClass}" data-player-id="${player.id}" data-player-name="${escapeHtml(player.fullName)}" data-action="${action}" data-remove-mode="${removeMode}">${escapeHtml(player.fullName)}${starHtml} <span class="${countClass}">${value}</span></button>`;
+    }).join('');
+
+    return `<div class="scoreboard-row"><span class="scoreboard-label">${label}</span>${pills}</div>`;
+  }).join('');
+
+  if (!rowsHtml) {
     scoreboardEl.classList.add('hidden');
     scoreboardEl.innerHTML = '';
     return;
   }
 
   scoreboardEl.classList.remove('hidden');
-  const scorerPills = scorers
-    .map((player) => `<button type="button" class="scorer-pill" data-player-id="${player.id}" data-player-name="${escapeHtml(player.fullName)}">${escapeHtml(player.fullName)} <span class="scorer-count">${player.goals}</span></button>`)
-    .join('');
-  scoreboardEl.innerHTML = `<span class="scoreboard-label">Goals</span>${scorerPills}`;
+  scoreboardEl.innerHTML = rowsHtml;
 }
 
 function renderPlayers(players) {
@@ -417,11 +494,8 @@ function renderPlayers(players) {
           <span class="status-pill active">On field</span>
         </div>
         <button type="button" class="goal-btn" ${isGameActive ? '' : 'disabled'}>Goal</button>
+        <button type="button" class="stars-btn" ${isGameActive ? '' : 'disabled'}>Stars</button>
         <div class="time-box">
-          <div class="metric-group">
-            <span class="time-label">Share</span>
-            <span class="time-value" data-field="share">${formatPercent(player.totalSeconds, totalGameSeconds)}</span>
-          </div>
           <div class="metric-group">
             <span class="time-label">Time</span>
             <span class="time-value" data-field="time">${formatMinutes(player.totalSeconds)}</span>
@@ -448,11 +522,14 @@ function renderPlayers(players) {
         <span class="player-name">${escapeHtml(player.fullName)}</span>
         <span class="status-pill ${player.inStage ? 'active' : 'inactive'}">${player.inStage ? 'On field' : 'Bench'}</span>
       </div>
+      <button type="button" class="stars-btn" ${isGameFinished ? 'disabled' : ''}>Stars</button>
       <div class="time-box">
+        ${player.inStage ? '' : `
         <div class="metric-group">
           <span class="time-label">Share</span>
           <span class="time-value" data-field="share">${formatPercent(player.totalSeconds, totalGameSeconds)}</span>
         </div>
+        `}
         <div class="metric-group">
           <span class="time-label">Time</span>
           <span class="time-value" data-field="time">${formatMinutes(player.totalSeconds)}</span>
@@ -554,6 +631,79 @@ async function handleRemoveGoalClick(playerId, playerName) {
   }
 
   await removeLastGoal(playerId);
+}
+
+async function removeAllStars(playerId, action) {
+  const gameId = getCurrentGameId();
+  const response = await fetch(`/api/player-actions?playerId=${playerId}&gameId=${gameId}&action=${action}&all=true`, {
+    method: 'DELETE'
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    alert(errorData.message || 'Unable to remove the stars.');
+    return;
+  }
+
+  const updatedPlayers = await fetchPlayers();
+  renderPlayers(updatedPlayers);
+}
+
+async function handleRemoveAllStarsClick(playerId, playerName, action) {
+  const label = action.charAt(0).toUpperCase() + action.slice(1);
+  const confirmed = await showConfirmPopup(`Delete all ${label} entries for ${playerName} in this game?`);
+  if (!confirmed) {
+    return;
+  }
+
+  await removeAllStars(playerId, action);
+}
+
+async function logStars(playerId, action, value) {
+  const gameId = getCurrentGameId();
+  const response = await fetch('/api/player-actions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ playerId, gameId, action, value })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    alert(errorData.message || 'Unable to record the stars.');
+    return false;
+  }
+
+  const updatedPlayers = await fetchPlayers();
+  renderPlayers(updatedPlayers);
+  return true;
+}
+
+async function handleStarsButtonClick(playerId, playerName) {
+  const result = await showStarsPopup(playerName);
+  if (!result) {
+    return;
+  }
+
+  const succeeded = await logStars(playerId, result.action, result.value);
+  if (succeeded) {
+    setTimeout(showStarExplosion, STARS_POPUP_FADE_MS);
+  }
+}
+
+function handleStarsButtonEvent(event, cardSelector) {
+  const starsBtn = event.target.closest('.stars-btn');
+  if (!starsBtn || starsBtn.disabled) {
+    return;
+  }
+
+  const card = starsBtn.closest(cardSelector);
+  const playerId = Number(card?.dataset.playerId);
+  const playerName = card?.querySelector('.player-name')?.textContent || 'this player';
+  if (Number.isFinite(playerId)) {
+    handleStarsButtonClick(playerId, playerName);
+  }
 }
 
 async function toggleGameStatus() {
@@ -709,33 +859,59 @@ function setupDropZones() {
 
   stageEl.addEventListener('click', (event) => {
     const goalBtn = event.target.closest('.goal-btn');
-    if (!goalBtn || goalBtn.disabled) {
+    if (goalBtn && !goalBtn.disabled) {
+      const card = goalBtn.closest('.stage-player');
+      const playerId = Number(card?.dataset.playerId);
+      const playerName = card?.querySelector('.player-name')?.textContent || 'this player';
+      if (Number.isFinite(playerId)) {
+        handleGoalButtonClick(playerId, playerName);
+      }
       return;
     }
 
-    const card = goalBtn.closest('.stage-player');
-    const playerId = Number(card?.dataset.playerId);
-    const playerName = card?.querySelector('.player-name')?.textContent || 'this player';
-    if (Number.isFinite(playerId)) {
-      handleGoalButtonClick(playerId, playerName);
-    }
+    handleStarsButtonEvent(event, '.stage-player');
+  });
+
+  playerListEl.addEventListener('click', (event) => {
+    handleStarsButtonEvent(event, '.player-card');
   });
 
   scoreboardEl.addEventListener('click', (event) => {
-    const pill = event.target.closest('.scorer-pill');
+    const pill = event.target.closest('button[data-remove-mode]');
     if (!pill) {
       return;
     }
 
     const playerId = Number(pill.dataset.playerId);
     const playerName = pill.dataset.playerName || 'this player';
-    if (Number.isFinite(playerId)) {
+    if (!Number.isFinite(playerId)) {
+      return;
+    }
+
+    if (pill.dataset.removeMode === 'last') {
       handleRemoveGoalClick(playerId, playerName);
+    } else {
+      handleRemoveAllStarsClick(playerId, playerName, pill.dataset.action);
     }
   });
 
   confirmPopupYesBtn.addEventListener('click', () => resolveConfirmPopup(true));
   confirmPopupNoBtn.addEventListener('click', () => resolveConfirmPopup(false));
+
+  starsPopupSubmitBtn.addEventListener('click', () => {
+    if (!starsPopupActionEl.value) {
+      starsPopupErrorEl.classList.remove('hidden');
+      return;
+    }
+
+    resolveStarsPopup({ action: starsPopupActionEl.value, value: Number(starsPopupStarsEl.value) });
+  });
+  starsPopupActionEl.addEventListener('change', () => {
+    if (starsPopupActionEl.value) {
+      starsPopupErrorEl.classList.add('hidden');
+    }
+  });
+  starsPopupCancelBtn.addEventListener('click', () => resolveStarsPopup(null));
 
   gameToggleBtn.addEventListener('click', toggleGameStatus);
   endQuarterBtn.addEventListener('click', handleEndQuarterClick);

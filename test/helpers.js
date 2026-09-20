@@ -168,6 +168,19 @@ function removeLastGoal(fetchAs, playerId, gameId) {
   });
 }
 
+function logStars(fetchAs, playerId, gameId, action, value) {
+  return fetchAs('/api/player-actions', {
+    method: 'POST',
+    body: JSON.stringify({ playerId, gameId, action, value })
+  });
+}
+
+function removeAllStars(fetchAs, playerId, gameId, action) {
+  return fetchAs(`/api/player-actions?playerId=${playerId}&gameId=${gameId}&action=${action}&all=true`, {
+    method: 'DELETE'
+  });
+}
+
 // Shifts a quarter's game_quarter.start_time AND every existing player_activity row
 // for that game back by the same delta, so the whole session (clock-ins included) is
 // consistently simulated as having happened `msAgo` in the past — not just the
@@ -211,5 +224,7 @@ module.exports = {
   takeOffField,
   logGoal,
   removeLastGoal,
+  logStars,
+  removeAllStars,
   rewindQuarterStartTime
 };

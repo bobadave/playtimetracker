@@ -56,6 +56,27 @@
           <div id="roster-goal-chart" class="goal-chart" aria-label="Player all-time goals scored"></div>
         </section>
 
+        <section class="roster-chart-card">
+          <div class="chart-header">
+            <h2>Effort Leaderboard</h2>
+          </div>
+          <div id="roster-effort-chart" class="goal-chart" aria-label="Player all-time effort stars"></div>
+        </section>
+
+        <section class="roster-chart-card">
+          <div class="chart-header">
+            <h2>Spirit Leaderboard</h2>
+          </div>
+          <div id="roster-spirit-chart" class="goal-chart" aria-label="Player all-time spirit stars"></div>
+        </section>
+
+        <section class="roster-chart-card">
+          <div class="chart-header">
+            <h2>Improvement Leaderboard</h2>
+          </div>
+          <div id="roster-improvement-chart" class="goal-chart" aria-label="Player all-time improvement stars"></div>
+        </section>
+
         <div class="table-scroll">
         <table id="roster-table" class="data-table data-table--fit">
           <thead>
@@ -187,21 +208,21 @@
           .join('');
       }
 
-      function renderGoalChart(players, colorMap) {
-        const chartEl = document.getElementById('roster-goal-chart');
+      function renderLeaderboardChart(elementId, players, colorMap, valueKey, emptyMessage) {
+        const chartEl = document.getElementById(elementId);
         const visiblePlayers = players.filter((player) => !player.archive);
-        const maxGoals = visiblePlayers.reduce((max, player) => Math.max(max, Number(player.cumulativeGoals) || 0), 0);
+        const maxValue = visiblePlayers.reduce((max, player) => Math.max(max, Number(player[valueKey]) || 0), 0);
 
-        if (!visiblePlayers.length || maxGoals <= 0) {
-          chartEl.innerHTML = '<p class="chart-empty">No goals recorded yet.</p>';
+        if (!visiblePlayers.length || maxValue <= 0) {
+          chartEl.innerHTML = `<p class="chart-empty">${escapeHtml(emptyMessage)}</p>`;
           return;
         }
 
-        const sortedPlayers = [...visiblePlayers].sort((a, b) => (Number(b.cumulativeGoals) || 0) - (Number(a.cumulativeGoals) || 0));
+        const sortedPlayers = [...visiblePlayers].sort((a, b) => (Number(b[valueKey]) || 0) - (Number(a[valueKey]) || 0));
 
         chartEl.innerHTML = sortedPlayers.map((player) => {
-          const goals = Number(player.cumulativeGoals) || 0;
-          const widthPercent = (goals / maxGoals) * 100;
+          const value = Number(player[valueKey]) || 0;
+          const widthPercent = (value / maxValue) * 100;
           const playerName = `${player.firstName} ${player.lastName}`.trim();
           const color = colorMap[player.id];
 
@@ -211,10 +232,26 @@
               <div class="goal-bar-track">
                 <div class="goal-bar-fill" style="width: ${widthPercent}%; background: ${color};"></div>
               </div>
-              <span class="goal-bar-value">${goals}</span>
+              <span class="goal-bar-value">${value}</span>
             </div>
           `;
         }).join('');
+      }
+
+      function renderGoalChart(players, colorMap) {
+        renderLeaderboardChart('roster-goal-chart', players, colorMap, 'cumulativeGoals', 'No goals recorded yet.');
+      }
+
+      function renderEffortChart(players, colorMap) {
+        renderLeaderboardChart('roster-effort-chart', players, colorMap, 'cumulativeEffort', 'No effort stars recorded yet.');
+      }
+
+      function renderSpiritChart(players, colorMap) {
+        renderLeaderboardChart('roster-spirit-chart', players, colorMap, 'cumulativeSpirit', 'No spirit stars recorded yet.');
+      }
+
+      function renderImprovementChart(players, colorMap) {
+        renderLeaderboardChart('roster-improvement-chart', players, colorMap, 'cumulativeImprovement', 'No improvement stars recorded yet.');
       }
 
       const AVERAGE_CHART_TRACK_HEIGHT = 200;
@@ -385,6 +422,9 @@
         const colorMap = getPlayerColorMap(players);
         renderRosterChart(players, colorMap);
         renderGoalChart(players, colorMap);
+        renderEffortChart(players, colorMap);
+        renderSpiritChart(players, colorMap);
+        renderImprovementChart(players, colorMap);
         renderAveragePlayTimeChart(players, colorMap);
         updateSortIndicators();
 

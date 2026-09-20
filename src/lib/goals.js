@@ -1,7 +1,7 @@
 const db = require('../db');
 const { resolveGameId } = require('./gameTime');
 
-const PLAYER_ACTION_TYPES = new Set(['goal']);
+const PLAYER_ACTION_TYPES = new Set(['goal', 'effort', 'spirit', 'improvement']);
 
 async function getGoalCountMap(gameId) {
   const resolvedGameId = resolveGameId(gameId);

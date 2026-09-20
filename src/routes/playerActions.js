@@ -13,7 +13,7 @@ router.post('/api/player-actions', async (req, res) => {
     return res.status(401).json({ message: 'Authentication required.' });
   }
 
-  const { playerId, gameId, action } = req.body || {};
+  const { playerId, gameId, action, value } = req.body || {};
   const resolvedPlayerId = Number(playerId);
 
   if (!Number.isFinite(resolvedPlayerId) || resolvedPlayerId <= 0) {
@@ -22,6 +22,11 @@ router.post('/api/player-actions', async (req, res) => {
 
   if (!PLAYER_ACTION_TYPES.has(action)) {
     return res.status(400).json({ message: 'A valid action is required.' });
+  }
+
+  const resolvedValue = value === undefined ? 1 : Number(value);
+  if (!Number.isInteger(resolvedValue) || resolvedValue < 1 || resolvedValue > 5) {
+    return res.status(400).json({ message: 'value must be an integer between 1 and 5.' });
   }
 
   const resolvedGameId = resolveGameId(gameId);
@@ -39,25 +44,35 @@ router.post('/api/player-actions', async (req, res) => {
     return res.status(403).json({ message: 'You do not have access to this team.' });
   }
 
-  const lastActivity = await db.get(
-    'SELECT * FROM player_activity WHERE game_id = ? AND player_id = ? ORDER BY id DESC LIMIT 1',
-    [resolvedGameId, resolvedPlayerId]
-  );
+  // Goals require the player to be actively on the field at the moment they're logged.
+  // Star ratings (effort/spirit/improvement) are a subjective, retrospective call a coach
+  // can make about any rostered player in this game — on the field or benched — so they
+  // skip this check.
+  if (action === 'goal') {
+    const lastActivity = await db.get(
+      'SELECT * FROM player_activity WHERE game_id = ? AND player_id = ? ORDER BY id DESC LIMIT 1',
+      [resolvedGameId, resolvedPlayerId]
+    );
 
-  if (!lastActivity || Number(lastActivity.in_play) !== 1) {
-    return res.status(409).json({ message: 'Player must be on the field to log this action.' });
+    if (!lastActivity || Number(lastActivity.in_play) !== 1) {
+      return res.status(409).json({ message: 'Player must be on the field to log this action.' });
+    }
   }
 
   const timestamp = new Date().toISOString();
   const result = await db.run(
-    'INSERT INTO player_action (game_id, player_id, action, timestamp) VALUES (?, ?, ?, ?)',
-    [resolvedGameId, resolvedPlayerId, action, timestamp]
+    'INSERT INTO player_action (game_id, player_id, action, value, timestamp) VALUES (?, ?, ?, ?, ?)',
+    [resolvedGameId, resolvedPlayerId, action, resolvedValue, timestamp]
   );
 
-  const goalCountRow = await db.get(
-    "SELECT COUNT(*) AS total FROM player_action WHERE game_id = ? AND player_id = ? AND action = 'goal'",
-    [resolvedGameId, resolvedPlayerId]
-  );
+  let goalCount = null;
+  if (action === 'goal') {
+    const goalCountRow = await db.get(
+      "SELECT COUNT(*) AS total FROM player_action WHERE game_id = ? AND player_id = ? AND action = 'goal'",
+      [resolvedGameId, resolvedPlayerId]
+    );
+    goalCount = Number(goalCountRow.total);
+  }
 
   return res.status(201).json({
     playerAction: {
@@ -65,9 +80,10 @@ router.post('/api/player-actions', async (req, res) => {
       gameId: resolvedGameId,
       playerId: resolvedPlayerId,
       action,
+      value: resolvedValue,
       timestamp
     },
-    goalCount: Number(goalCountRow.total)
+    goalCount
   });
 });
 
@@ -77,7 +93,7 @@ router.delete('/api/player-actions', async (req, res) => {
     return res.status(401).json({ message: 'Authentication required.' });
   }
 
-  const { playerId, gameId, action } = req.query || {};
+  const { playerId, gameId, action, all } = req.query || {};
   const resolvedPlayerId = Number(playerId);
 
   if (!Number.isFinite(resolvedPlayerId) || resolvedPlayerId <= 0) {
@@ -101,6 +117,24 @@ router.delete('/api/player-actions', async (req, res) => {
 
   if (!(await userHasTeamAccess(currentUserId, game.team_id))) {
     return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
+  // Goals are removed one at a time (most recent first) via the scoreboard pill.
+  // Star ratings (effort/spirit/improvement) are removed all at once for this exact
+  // game_id + player_id + action combination — scoped tightly so it never touches the
+  // same classification in another game, another player's entries, or a different
+  // classification for this same player/game.
+  if (all === 'true') {
+    const result = await db.run(
+      'DELETE FROM player_action WHERE game_id = ? AND player_id = ? AND action = ?',
+      [resolvedGameId, resolvedPlayerId, action]
+    );
+
+    if (result.changes === 0) {
+      return res.status(404).json({ message: 'No matching entries found to remove.' });
+    }
+
+    return res.json({ deletedCount: result.changes });
   }
 
   const lastAction = await db.get(

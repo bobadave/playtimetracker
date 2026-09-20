@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  db,
   startTestServer,
   stopTestServer,
   registerAndLogIn,
@@ -12,7 +13,9 @@ const {
   putOnField,
   takeOffField,
   logGoal,
-  removeLastGoal
+  removeLastGoal,
+  logStars,
+  removeAllStars
 } = require('./helpers');
 
 test.before(async () => {
@@ -287,4 +290,168 @@ test('the roster endpoint excludes goals scored in archived games from cumulativ
     1,
     'goals from an archived game must not count toward the all-time total'
   );
+});
+
+test('effort, spirit, and improvement stars can be logged with a 1-5 value, whether the player is on the field or benched', async () => {
+  const { cookie } = await registerAndLogIn('PlayerActionStars');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Stars Team');
+  const player = await createPlayer(fetchAs, team.id, 'Stars', 'Player');
+  const game = await createGame(fetchAs, team.id, 'Field');
+
+  const whileBenched = await logStars(fetchAs, player.id, game.id, 'effort', 1);
+  assert.equal(whileBenched.status, 201, 'unlike goals, stars can be logged for a benched player');
+
+  await putOnField(fetchAs, player.id, game.id);
+
+  const effortResponse = await logStars(fetchAs, player.id, game.id, 'effort', 4);
+  assert.equal(effortResponse.status, 201);
+  const effortJson = await effortResponse.json();
+  assert.equal(effortJson.playerAction.action, 'effort');
+  assert.equal(effortJson.playerAction.value, 4);
+  assert.equal(effortJson.goalCount, null, 'goalCount is only meaningful for goal actions');
+
+  const spiritResponse = await logStars(fetchAs, player.id, game.id, 'spirit', 2);
+  assert.equal(spiritResponse.status, 201);
+  assert.equal((await spiritResponse.json()).playerAction.action, 'spirit');
+
+  const improvementResponse = await logStars(fetchAs, player.id, game.id, 'improvement', 5);
+  assert.equal(improvementResponse.status, 201);
+  assert.equal((await improvementResponse.json()).playerAction.value, 5);
+});
+
+test('a missing value defaults to 1, and an out-of-range or non-integer value is rejected with 400', async () => {
+  const { cookie } = await registerAndLogIn('PlayerActionStarsValidation');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Stars Validation Team');
+  const player = await createPlayer(fetchAs, team.id, 'Stars', 'Validator');
+  const game = await createGame(fetchAs, team.id, 'Field');
+  await putOnField(fetchAs, player.id, game.id);
+
+  const missingValue = await fetchAs('/api/player-actions', {
+    method: 'POST',
+    body: JSON.stringify({ playerId: player.id, gameId: game.id, action: 'effort' })
+  });
+  assert.equal(missingValue.status, 201);
+  assert.equal((await missingValue.json()).playerAction.value, 1, 'value defaults to 1 when omitted');
+
+  const zeroValue = await logStars(fetchAs, player.id, game.id, 'effort', 0);
+  assert.equal(zeroValue.status, 400);
+
+  const tooHighValue = await logStars(fetchAs, player.id, game.id, 'effort', 6);
+  assert.equal(tooHighValue.status, 400);
+
+  const nonIntegerValue = await logStars(fetchAs, player.id, game.id, 'effort', 2.5);
+  assert.equal(nonIntegerValue.status, 400);
+});
+
+test('the roster endpoint sums effort, spirit, and improvement values across games, excluding archived games', async () => {
+  const { cookie } = await registerAndLogIn('RosterStarsTotal');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Roster Stars Team');
+  const player = await createPlayer(fetchAs, team.id, 'Roster', 'Stars');
+  const activeGame = await createGame(fetchAs, team.id, 'Active Field');
+  const archivedGame = await createGame(fetchAs, team.id, 'Archived Field');
+
+  await putOnField(fetchAs, player.id, activeGame.id);
+  await logStars(fetchAs, player.id, activeGame.id, 'effort', 3);
+  await logStars(fetchAs, player.id, activeGame.id, 'effort', 2);
+  await logStars(fetchAs, player.id, activeGame.id, 'spirit', 5);
+  await logStars(fetchAs, player.id, activeGame.id, 'improvement', 1);
+
+  await putOnField(fetchAs, player.id, archivedGame.id);
+  await logStars(fetchAs, player.id, archivedGame.id, 'effort', 4);
+  await fetchAs(`/api/games/${archivedGame.id}/archive`, { method: 'PUT', body: JSON.stringify({ archived: true }) });
+
+  const roster = await (await fetchAs(`/api/players?teamId=${team.id}`)).json();
+  const rosterPlayer = roster.find((p) => p.id === player.id);
+  assert.equal(rosterPlayer.cumulativeEffort, 5, 'effort from the archived game must not count');
+  assert.equal(rosterPlayer.cumulativeSpirit, 5);
+  assert.equal(rosterPlayer.cumulativeImprovement, 1);
+});
+
+test('the per-game players endpoint reports effort, spirit, and improvement scoped to that game only', async () => {
+  const { cookie } = await registerAndLogIn('PerGameStarsTally');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Per Game Stars Team');
+  const scorer = await createPlayer(fetchAs, team.id, 'Tally', 'Player');
+  const untouched = await createPlayer(fetchAs, team.id, 'No', 'Stars');
+  const gameA = await createGame(fetchAs, team.id, 'Field A');
+  const gameB = await createGame(fetchAs, team.id, 'Field B');
+
+  await putOnField(fetchAs, scorer.id, gameA.id);
+  await logStars(fetchAs, scorer.id, gameA.id, 'effort', 3);
+  await logStars(fetchAs, scorer.id, gameA.id, 'effort', 2);
+  await logStars(fetchAs, scorer.id, gameA.id, 'spirit', 4);
+
+  await putOnField(fetchAs, scorer.id, gameB.id);
+  await logStars(fetchAs, scorer.id, gameB.id, 'improvement', 5);
+
+  const playersInGameA = await (await fetchAs(`/api/players/${gameA.id}?teamId=${team.id}`)).json();
+  const scorerInGameA = playersInGameA.find((p) => p.id === scorer.id);
+  assert.equal(scorerInGameA.effort, 5, 'effort sums to 5 (3 + 2) within gameA only');
+  assert.equal(scorerInGameA.spirit, 4);
+  assert.equal(scorerInGameA.improvement, 0, "gameB's improvement stars must not leak into gameA");
+  assert.equal(playersInGameA.find((p) => p.id === untouched.id).effort, 0);
+
+  const playersInGameB = await (await fetchAs(`/api/players/${gameB.id}?teamId=${team.id}`)).json();
+  const scorerInGameB = playersInGameB.find((p) => p.id === scorer.id);
+  assert.equal(scorerInGameB.improvement, 5);
+  assert.equal(scorerInGameB.effort, 0, "gameA's effort stars must not leak into gameB");
+});
+
+test('deleting all stars for a game+player+classification only removes that exact combination', async () => {
+  const { cookie } = await registerAndLogIn('DeleteAllStarsScope');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Delete All Stars Team');
+  const playerA = await createPlayer(fetchAs, team.id, 'Player', 'A');
+  const playerB = await createPlayer(fetchAs, team.id, 'Player', 'B');
+  const gameA = await createGame(fetchAs, team.id, 'Field A');
+  const gameB = await createGame(fetchAs, team.id, 'Field B');
+
+  // The exact combination being deleted: two effort entries for playerA in gameA.
+  await logStars(fetchAs, playerA.id, gameA.id, 'effort', 3);
+  await logStars(fetchAs, playerA.id, gameA.id, 'effort', 2);
+
+  // Same player + same game, but a DIFFERENT classification — must survive.
+  await logStars(fetchAs, playerA.id, gameA.id, 'spirit', 4);
+
+  // Same player + same classification, but a DIFFERENT game — must survive.
+  await logStars(fetchAs, playerA.id, gameB.id, 'effort', 5);
+
+  // Same game + same classification, but a DIFFERENT player — must survive.
+  await logStars(fetchAs, playerB.id, gameA.id, 'effort', 1);
+
+  const deleteResponse = await removeAllStars(fetchAs, playerA.id, gameA.id, 'effort');
+  assert.equal(deleteResponse.status, 200);
+  const deleteJson = await deleteResponse.json();
+  assert.equal(deleteJson.deletedCount, 2, 'only the two matching rows for playerA/gameA/effort were deleted');
+
+  // Direct row-level check: exactly the targeted rows are gone, nothing else touched.
+  // Scoped to this test's own players/games — the table is shared across the whole
+  // suite, so an unscoped query would also see unrelated rows from other tests.
+  const remainingRows = await db.all(
+    `SELECT game_id, player_id, action, value FROM player_action
+     WHERE action IN (?, ?) AND player_id IN (?, ?) AND game_id IN (?, ?)
+     ORDER BY game_id, player_id, action, value`,
+    ['effort', 'spirit', playerA.id, playerB.id, gameA.id, gameB.id]
+  );
+  assert.deepEqual(remainingRows, [
+    { game_id: gameA.id, player_id: playerA.id, action: 'spirit', value: 4 },
+    { game_id: gameA.id, player_id: playerB.id, action: 'effort', value: 1 },
+    { game_id: gameB.id, player_id: playerA.id, action: 'effort', value: 5 }
+  ]);
+
+  // API-level check mirrors the same expectations via the endpoint the UI actually reads.
+  const playersInGameA = await (await fetchAs(`/api/players/${gameA.id}?teamId=${team.id}`)).json();
+  assert.equal(playersInGameA.find((p) => p.id === playerA.id).effort, 0, "playerA's effort in gameA is gone");
+  assert.equal(playersInGameA.find((p) => p.id === playerA.id).spirit, 4, "playerA's spirit in gameA is untouched");
+  assert.equal(playersInGameA.find((p) => p.id === playerB.id).effort, 1, "playerB's effort in gameA is untouched");
+
+  const playersInGameB = await (await fetchAs(`/api/players/${gameB.id}?teamId=${team.id}`)).json();
+  assert.equal(playersInGameB.find((p) => p.id === playerA.id).effort, 5, "playerA's effort in gameB is untouched");
+
+  // Nothing left to delete now for that exact combination.
+  const secondDelete = await removeAllStars(fetchAs, playerA.id, gameA.id, 'effort');
+  assert.equal(secondDelete.status, 404);
 });

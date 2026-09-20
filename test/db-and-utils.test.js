@@ -130,6 +130,65 @@ test('createDbApi upgrades an existing database that is missing team_id columns'
   });
 });
 
+test('createDbApi migrates an existing player_action table to add the value column and widened action types', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'playtimetracker-'));
+  const tempDbPath = path.join(tempDir, 'legacy_player_action.db');
+  const dbApi = createDbApi(tempDbPath);
+
+  await dbApi.run(`
+    CREATE TABLE player_action (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      game_id INTEGER NOT NULL,
+      player_id INTEGER NOT NULL,
+      action TEXT NOT NULL CHECK (action IN ('goal')),
+      timestamp TEXT NOT NULL
+    )
+  `);
+  await dbApi.run(
+    'INSERT INTO player_action (id, game_id, player_id, action, timestamp) VALUES (?, ?, ?, ?, ?)',
+    [5, 1, 1, 'goal', '2026-01-01T00:00:00.000Z']
+  );
+
+  await dbApi.initialize();
+
+  const columns = await dbApi.all('PRAGMA table_info(player_action)');
+  assert.ok(columns.some((column) => column.name === 'value'));
+
+  const migratedRow = await dbApi.get('SELECT * FROM player_action WHERE id = 5');
+  assert.equal(migratedRow.action, 'goal');
+  assert.equal(Number(migratedRow.value), 1, 'a pre-existing row without a value column gets defaulted to 1');
+
+  const nextInsert = await dbApi.run(
+    'INSERT INTO player_action (game_id, player_id, action, value, timestamp) VALUES (?, ?, ?, ?, ?)',
+    [1, 1, 'effort', 4, new Date().toISOString()]
+  );
+  assert.ok(nextInsert.id > 5, 'autoincrement continues past the migrated rows rather than colliding');
+
+  const effortRow = await dbApi.get('SELECT * FROM player_action WHERE id = ?', [nextInsert.id]);
+  assert.equal(effortRow.action, 'effort');
+  assert.equal(Number(effortRow.value), 4);
+
+  await assert.rejects(
+    dbApi.run(
+      'INSERT INTO player_action (game_id, player_id, action, value, timestamp) VALUES (?, ?, ?, ?, ?)',
+      [1, 1, 'effort', 6, new Date().toISOString()]
+    ),
+    /CHECK constraint failed/,
+    'value is still constrained to 1-5 after the migration'
+  );
+
+  await new Promise((resolve, reject) => {
+    dbApi.db.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+});
+
 test('run, get, and all reject their promise when the underlying SQL errors', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'playtimetracker-'));
   const dbApi = createDbApi(path.join(tempDir, 'game_time_tracker.db'));

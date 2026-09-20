@@ -64,11 +64,43 @@
 
     <div id="goal-popup" class="popup-overlay goal-popup" aria-live="assertive">GOOOOAAALL!!!</div>
 
+    <div id="stars-explosion" class="stars-explosion" aria-hidden="true"></div>
+
     <div id="confirm-popup" class="popup-overlay confirm-popup" role="alertdialog" aria-modal="true" aria-live="assertive">
       <p id="confirm-popup-message" class="confirm-popup-message"></p>
       <div class="confirm-popup-actions">
         <button type="button" id="confirm-popup-yes" class="confirm-btn confirm-yes">Yes</button>
         <button type="button" id="confirm-popup-no" class="confirm-btn confirm-no">No</button>
+      </div>
+    </div>
+
+    <div id="stars-popup" class="popup-overlay confirm-popup stars-popup" role="alertdialog" aria-modal="true" aria-live="assertive">
+      <p id="stars-popup-message" class="confirm-popup-message"></p>
+      <div class="stars-popup-fields">
+        <label class="stars-popup-field">
+          <span class="stars-popup-field-label">Action</span>
+          <select id="stars-popup-action" class="stars-popup-select">
+            <option value="" selected>Select</option>
+            <option value="effort">Effort</option>
+            <option value="spirit">Spirit</option>
+            <option value="improvement">Improvement</option>
+          </select>
+        </label>
+        <label class="stars-popup-field">
+          <span class="stars-popup-field-label">Stars</span>
+          <select id="stars-popup-stars" class="stars-popup-select stars-popup-select-stars">
+            <option value="1">★☆☆☆☆</option>
+            <option value="2">★★☆☆☆</option>
+            <option value="3">★★★☆☆</option>
+            <option value="4">★★★★☆</option>
+            <option value="5">★★★★★</option>
+          </select>
+        </label>
+      </div>
+      <p id="stars-popup-error" class="stars-popup-error hidden">Please select an action.</p>
+      <div class="confirm-popup-actions">
+        <button type="button" id="stars-popup-submit" class="confirm-btn confirm-yes">Log Stars</button>
+        <button type="button" id="stars-popup-cancel" class="confirm-btn confirm-no">Cancel</button>
       </div>
     </div>
 
