@@ -361,12 +361,21 @@ function resolveConfirmPopup(result) {
   }
 }
 
+// Styling an individual <option> (the "Select" placeholder) is unreliable across
+// browsers — some only honor it in the closed box, others ignore it entirely. Toggling
+// italics on the <select> itself based on whether the placeholder is the current value
+// is what actually renders consistently.
+function updateStarsActionPlaceholderStyle() {
+  starsPopupActionEl.classList.toggle('stars-popup-select--placeholder', !starsPopupActionEl.value);
+}
+
 function showStarsPopup(playerName) {
   return new Promise((resolve) => {
     starsPopupResolver = resolve;
     starsPopupMessageEl.textContent = `Log stars for ${playerName}`;
     starsPopupActionEl.value = '';
     starsPopupStarsEl.value = '1';
+    updateStarsActionPlaceholderStyle();
     starsPopupErrorEl.classList.add('hidden');
     starsPopupEl.classList.add('visible');
   });
@@ -522,7 +531,7 @@ function renderPlayers(players) {
         <span class="player-name">${escapeHtml(player.fullName)}</span>
         <span class="status-pill ${player.inStage ? 'active' : 'inactive'}">${player.inStage ? 'On field' : 'Bench'}</span>
       </div>
-      <button type="button" class="stars-btn" ${isGameFinished ? 'disabled' : ''}>Stars</button>
+      <button type="button" class="stars-btn">Stars</button>
       <div class="time-box">
         ${player.inStage ? '' : `
         <div class="metric-group">
@@ -907,6 +916,7 @@ function setupDropZones() {
     resolveStarsPopup({ action: starsPopupActionEl.value, value: Number(starsPopupStarsEl.value) });
   });
   starsPopupActionEl.addEventListener('change', () => {
+    updateStarsActionPlaceholderStyle();
     if (starsPopupActionEl.value) {
       starsPopupErrorEl.classList.add('hidden');
     }

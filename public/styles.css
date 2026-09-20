@@ -1882,6 +1882,14 @@ h1 {
   letter-spacing: 0.1em;
 }
 
+.stars-popup-placeholder-option {
+  font-style: italic;
+}
+
+.stars-popup-select--placeholder {
+  font-style: italic;
+}
+
 .stars-popup-error {
   margin: 0;
   color: var(--red);
