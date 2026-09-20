@@ -4,7 +4,7 @@ const { DEFAULT_GAME_ID, DEFAULT_TEAM_ID } = require('../config');
 const { getSessionUserId } = require('../lib/session');
 const { resolveTeamId, userHasTeamAccess } = require('../lib/teams');
 const { resolveGameId, enforceQuarterTimeLimit } = require('../lib/gameTime');
-const { getActivitySummaryMap, getCumulativeSummaryMap } = require('../lib/activity');
+const { getActivitySummaryMap, getCumulativeSummaryMap, getGamesPlayedCountMap } = require('../lib/activity');
 const { getGoalCountMap, getCumulativeGoalMap } = require('../lib/goals');
 
 const router = express.Router();
@@ -33,11 +33,16 @@ router.get('/api/players', async (req, res) => {
   const gameSummaryMap = await getActivitySummaryMap(gameId);
   const cumulativeMap = await getCumulativeSummaryMap();
   const cumulativeGoalMap = await getCumulativeGoalMap();
+  const gamesPlayedMap = await getGamesPlayedCountMap();
 
   const payload = players.map((player) => {
     const summary = gameSummaryMap[String(player.id)] || { totalSeconds: 0, isInStage: false };
     const cumulativeSeconds = cumulativeMap[String(player.id)] || 0;
     const cumulativeGoals = cumulativeGoalMap[String(player.id)] || 0;
+    const gamesPlayed = gamesPlayedMap[String(player.id)] || 0;
+    // Average is over games the player actually appeared in, not every game the team
+    // has played — a game they sat out entirely shouldn't drag this number down.
+    const averageSecondsPerGame = gamesPlayed > 0 ? cumulativeSeconds / gamesPlayed : 0;
 
     return {
       id: player.id,
@@ -49,8 +54,11 @@ router.get('/api/players', async (req, res) => {
       totalSeconds: summary.totalSeconds,
       cumulativeSeconds,
       cumulativeGoals,
+      gamesPlayed,
+      averageSecondsPerGame,
       totalMinutes: summary.totalSeconds / 60,
-      cumulativeMinutes: cumulativeSeconds / 60
+      cumulativeMinutes: cumulativeSeconds / 60,
+      averageMinutesPerGame: averageSecondsPerGame / 60
     };
   });
 

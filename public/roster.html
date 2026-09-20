@@ -44,6 +44,13 @@
 
         <section class="roster-chart-card">
           <div class="chart-header">
+            <h2>Average Player Time Per Game</h2>
+          </div>
+          <div id="roster-average-chart" class="average-chart" aria-label="Player average play time per game played"></div>
+        </section>
+
+        <section class="roster-chart-card">
+          <div class="chart-header">
             <h2>All-time Goals</h2>
           </div>
           <div id="roster-goal-chart" class="goal-chart" aria-label="Player all-time goals scored"></div>
@@ -210,6 +217,97 @@
         }).join('');
       }
 
+      const AVERAGE_CHART_TRACK_HEIGHT = 200;
+      const AVERAGE_CHART_TOP_PADDING = 28;
+      const AVERAGE_CHART_NAME_FONT = '11px Arial, Helvetica, sans-serif';
+
+      function calculateMedian(values) {
+        if (!values.length) {
+          return 0;
+        }
+
+        const sorted = [...values].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+      }
+
+      function measureTextWidth(text, font) {
+        if (!measureTextWidth.ctx) {
+          measureTextWidth.ctx = document.createElement('canvas').getContext('2d');
+        }
+
+        measureTextWidth.ctx.font = font;
+        return measureTextWidth.ctx.measureText(text).width;
+      }
+
+      function renderAveragePlayTimeChart(players, colorMap) {
+        const chartEl = document.getElementById('roster-average-chart');
+        const visiblePlayers = players.filter((player) => !player.archive);
+        const averages = visiblePlayers.map((player) => Number(player.averageSecondsPerGame) || 0);
+        const maxAverage = Math.max(0, ...averages);
+
+        if (!visiblePlayers.length || maxAverage <= 0) {
+          chartEl.innerHTML = '<p class="chart-empty">No playing time recorded yet.</p>';
+          return;
+        }
+
+        const sortedPlayers = [...visiblePlayers].sort((a, b) => (Number(b.averageSecondsPerGame) || 0) - (Number(a.averageSecondsPerGame) || 0));
+        const meanAverage = averages.reduce((sum, value) => sum + value, 0) / averages.length;
+        const medianAverage = calculateMedian(averages);
+        const usableHeight = AVERAGE_CHART_TRACK_HEIGHT - AVERAGE_CHART_TOP_PADDING;
+
+        const barsHtml = sortedPlayers.map((player) => {
+          const average = Number(player.averageSecondsPerGame) || 0;
+          const heightPx = Math.max(4, (average / maxAverage) * usableHeight);
+          const color = colorMap[player.id];
+
+          return `
+            <div class="average-chart-bar-wrap">
+              <div class="average-chart-bar" style="height: ${heightPx}px; background: ${color};">
+                <span class="average-chart-value">${formatDuration(average)}</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        const namesHtml = sortedPlayers.map((player) => {
+          const playerName = `${player.firstName} ${player.lastName}`.trim();
+          return `
+            <div class="average-chart-name-wrap">
+              <span class="average-chart-name">${escapeHtml(playerName)}</span>
+            </div>
+          `;
+        }).join('');
+
+        const meanBottomPx = Math.min(usableHeight, (meanAverage / maxAverage) * usableHeight);
+        const medianBottomPx = Math.min(usableHeight, (medianAverage / maxAverage) * usableHeight);
+
+        const longestNameWidth = Math.max(
+          0,
+          ...sortedPlayers.map((player) => measureTextWidth(`${player.firstName} ${player.lastName}`.trim(), AVERAGE_CHART_NAME_FONT))
+        );
+        const nameAreaHeight = Math.ceil(longestNameWidth * Math.sin(Math.PI / 4) + 20);
+
+        chartEl.innerHTML = `
+          <div class="average-chart-legend">
+            <span class="average-chart-legend-item average-chart-legend-item--mean">
+              <span class="average-chart-legend-swatch"></span>
+              Mean <span class="average-chart-legend-value">${formatDuration(meanAverage)}</span>
+            </span>
+            <span class="average-chart-legend-item average-chart-legend-item--median">
+              <span class="average-chart-legend-swatch"></span>
+              Median <span class="average-chart-legend-value">${formatDuration(medianAverage)}</span>
+            </span>
+          </div>
+          <div class="average-chart-plot" style="height: ${AVERAGE_CHART_TRACK_HEIGHT}px;">
+            <div class="average-chart-line average-chart-line--mean" style="bottom: ${meanBottomPx}px;"></div>
+            <div class="average-chart-line average-chart-line--median" style="bottom: ${medianBottomPx}px;"></div>
+            <div class="average-chart-bars">${barsHtml}</div>
+          </div>
+          <div class="average-chart-names" style="height: ${nameAreaHeight}px;">${namesHtml}</div>
+        `;
+      }
+
       function renderTeamName(teamName) {
         const teamNameDisplay = document.getElementById('team-name-display');
         if (teamNameDisplay) {
@@ -287,6 +385,7 @@
         const colorMap = getPlayerColorMap(players);
         renderRosterChart(players, colorMap);
         renderGoalChart(players, colorMap);
+        renderAveragePlayTimeChart(players, colorMap);
         updateSortIndicators();
 
         tbody.innerHTML = visiblePlayers.map((player) => {

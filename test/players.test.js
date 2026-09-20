@@ -213,3 +213,61 @@ test('the roster endpoint excludes recorded play time from an archived game (cum
   assert.equal(afterPlayer.cumulativeSeconds, 100, 'only the still-active game\'s 100s should remain once the other game is archived');
   assert.equal(afterPlayer.cumulativeMinutes, afterPlayer.cumulativeSeconds / 60);
 });
+
+test('the roster endpoint computes averageSecondsPerGame over games actually played, not every game the team has played', async () => {
+  const { cookie } = await registerAndLogIn('RosterAverageTime');
+  const fetchAs = authedFetch(cookie);
+  const team = await createTeam(fetchAs, 'Roster Average Time Team');
+  const player = await createPlayer(fetchAs, team.id, 'Average', 'Timer');
+  const neverPlayed = await createPlayer(fetchAs, team.id, 'Never', 'Played');
+
+  const gameA = await createGame(fetchAs, team.id, 'Average Field A');
+  const gameB = await createGame(fetchAs, team.id, 'Average Field B');
+  // The team has this game too, but the player never clocks into it — it must not
+  // inflate the denominator (and so must not drag the average down).
+  await createGame(fetchAs, team.id, 'Average Field C');
+  const archivedGame = await createGame(fetchAs, team.id, 'Average Archived Field');
+
+  await putOnField(fetchAs, player.id, gameA.id);
+  await takeOffField(fetchAs, player.id, gameA.id);
+  await putOnField(fetchAs, player.id, gameB.id);
+  await takeOffField(fetchAs, player.id, gameB.id);
+  await putOnField(fetchAs, player.id, archivedGame.id);
+  await takeOffField(fetchAs, player.id, archivedGame.id);
+
+  // Rewrite each game's clock-in/out pair to a clean, non-overlapping, deterministic
+  // window so the totals below are exact rather than dependent on request timing.
+  async function setWindow(gameId, offsetMs, durationMs) {
+    const rows = await db.all(
+      'SELECT id FROM player_activity WHERE game_id = ? AND player_id = ? ORDER BY id ASC',
+      [gameId, player.id]
+    );
+    const startMs = Date.now() - 6 * 60 * 60 * 1000 + offsetMs;
+    await db.run('UPDATE player_activity SET timestamp = ? WHERE id = ?', [new Date(startMs).toISOString(), rows[0].id]);
+    await db.run('UPDATE player_activity SET timestamp = ? WHERE id = ?', [new Date(startMs + durationMs).toISOString(), rows[1].id]);
+  }
+
+  await setWindow(gameA.id, 0, 100000);
+  await setWindow(gameB.id, 200000, 300000);
+  await setWindow(archivedGame.id, 600000, 1000000);
+
+  const roster = await (await fetchAs(`/api/players?teamId=${team.id}`)).json();
+  const rosterPlayer = roster.find((p) => p.id === player.id);
+
+  assert.equal(rosterPlayer.gamesPlayed, 3, 'gameA, gameB, and the not-yet-archived game all count; the never-played game does not');
+  assert.equal(rosterPlayer.cumulativeSeconds, 1400);
+  assert.equal(rosterPlayer.averageSecondsPerGame, 1400 / 3);
+  assert.equal(rosterPlayer.averageMinutesPerGame, rosterPlayer.averageSecondsPerGame / 60);
+
+  await fetchAs(`/api/games/${archivedGame.id}/archive`, { method: 'PUT', body: JSON.stringify({ archived: true }) });
+
+  const afterGameArchived = await (await fetchAs(`/api/players?teamId=${team.id}`)).json();
+  const playerAfterArchive = afterGameArchived.find((p) => p.id === player.id);
+  assert.equal(playerAfterArchive.gamesPlayed, 2, 'archiving a game removes it from the denominator too, not just the numerator');
+  assert.equal(playerAfterArchive.cumulativeSeconds, 400);
+  assert.equal(playerAfterArchive.averageSecondsPerGame, 200);
+
+  const neverPlayedRoster = afterGameArchived.find((p) => p.id === neverPlayed.id);
+  assert.equal(neverPlayedRoster.gamesPlayed, 0);
+  assert.equal(neverPlayedRoster.averageSecondsPerGame, 0, 'a player with zero games played must be 0, not NaN or Infinity');
+});

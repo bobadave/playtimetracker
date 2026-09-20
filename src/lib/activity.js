@@ -106,10 +106,29 @@ async function getCumulativeSummaryMap() {
   );
 }
 
+// Counts, per player, how many distinct non-archived games they have any recorded
+// activity in at all (clocked in for any amount of time, even briefly). Paired with
+// getCumulativeSummaryMap this gives "average play time per game actually played":
+// cumulativeSeconds / gamesPlayed — deliberately excluding games where the player
+// never took the field at all, so an absence doesn't drag the average down the way
+// dividing by every game the team has played would.
+async function getGamesPlayedCountMap() {
+  const rows = await db.all(`
+    SELECT pa.player_id, COUNT(DISTINCT pa.game_id) AS total
+    FROM player_activity pa
+    INNER JOIN games g ON g.id = pa.game_id
+    WHERE g.archived = 0
+    GROUP BY pa.player_id
+  `);
+
+  return Object.fromEntries(rows.map((row) => [String(row.player_id), Number(row.total)]));
+}
+
 module.exports = {
   summarizeActivityRows,
   getPlayerSummary,
   getCumulativePlayerSeconds,
   getActivitySummaryMap,
-  getCumulativeSummaryMap
+  getCumulativeSummaryMap,
+  getGamesPlayedCountMap
 };
