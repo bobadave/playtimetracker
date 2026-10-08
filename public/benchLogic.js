@@ -16,6 +16,15 @@ function getDisplayOnField(player, pausedFieldPlayerIds) {
   return !!(player.inStage || isPendingOnField(player, pausedFieldPlayerIds));
 }
 
+// A game has "started" once any quarter has ever been opened (someone has been
+// clocked in, for any quarter) or the game has finished. A freshly created game has
+// no quarters yet and has not started, regardless of its paused/active flag — used to
+// decide whether to auto-open the Manage Bench popup on page load.
+function hasGameStarted(game) {
+  const quarters = (game && game.quarters) || [];
+  return quarters.length > 0 || !!(game && game.finished_at);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isPendingOnField, getDisplayOnField };
+  module.exports = { isPendingOnField, getDisplayOnField, hasGameStarted };
 }

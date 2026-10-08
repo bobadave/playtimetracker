@@ -1155,6 +1155,14 @@ async function initializeApp() {
 
     const players = await fetchPlayers();
     renderPlayers(players);
+
+    // A game that has never had a quarter opened (no one has ever been clocked in, for
+    // any quarter) has not been started yet — prompt for today's attendance right away.
+    // Once the game has started, reloading the page should not keep re-interrupting
+    // with this popup, so this only runs on the initial load, not the periodic refresh.
+    if (!hasGameStarted(gameData.game)) {
+      showManageBenchPopup();
+    }
   } catch (error) {
     gameIdDisplayEl.textContent = 'Game ID: --';
     playerListEl.innerHTML = '<p>Unable to load player data.</p>';
