@@ -1890,6 +1890,71 @@ h1 {
   font-style: italic;
 }
 
+.manage-bench-btn {
+  padding: 8px 14px;
+  font-size: 0.85rem;
+}
+
+.manage-bench-popup {
+  width: min(90vw, 420px);
+}
+
+.manage-bench-popup-title {
+  margin: 0;
+  color: #ffffff;
+  font-size: 1.1rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.manage-bench-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.manage-bench-list {
+  width: 100%;
+  max-height: 50vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.manage-bench-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.manage-bench-row-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.manage-bench-checkbox {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
 .stars-popup-error {
   margin: 0;
   color: var(--red);

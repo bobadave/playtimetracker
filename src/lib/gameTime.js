@@ -10,15 +10,21 @@ function resolveGameId(gameId) {
 }
 
 // Closes out every player currently marked in_play for this game, at the given
-// timestamp. Used both when a quarter ends (timeout or manual) and when the game is
-// merely paused mid-quarter (where the timestamp is just "now" — nothing to cap).
-async function closeOutActivePlayers(gameId, closeOutTimestamp) {
+// timestamp. Used when a quarter ends (timeout or manual), when the game is merely
+// paused mid-quarter (where the timestamp is just "now" — nothing to cap), and when a
+// player is marked absent (so their clock stops the moment they're pulled from the
+// game, scoped to just that one player via playerIdFilter rather than everyone).
+async function closeOutActivePlayers(gameId, closeOutTimestamp, playerIdFilter = null) {
   const activePlayers = await db.all(
     'SELECT DISTINCT player_id FROM player_activity WHERE game_id = ? AND in_play = 1',
     [gameId]
   );
 
   for (const { player_id } of activePlayers) {
+    if (playerIdFilter && !playerIdFilter.has(Number(player_id))) {
+      continue;
+    }
+
     const lastActivity = await db.get(
       'SELECT * FROM player_activity WHERE game_id = ? AND player_id = ? ORDER BY id DESC LIMIT 1',
       [gameId, player_id]

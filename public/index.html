@@ -37,6 +37,7 @@
         <aside class="panel roster-panel">
           <div class="panel-header">
             <h2>Bench</h2>
+            <button id="manage-bench-btn" type="button" class="secondary-btn small-btn manage-bench-btn">Manage Bench</button>
           </div>
           <div id="player-list" class="player-list" aria-live="polite"></div>
         </aside>
@@ -104,7 +105,21 @@
       </div>
     </div>
 
+    <div id="manage-bench-popup" class="popup-overlay confirm-popup manage-bench-popup" role="dialog" aria-modal="true" aria-live="assertive">
+      <h2 class="manage-bench-popup-title">Manage Bench</h2>
+      <div class="manage-bench-list-header">
+        <span>Player</span>
+        <span>On Bench</span>
+      </div>
+      <div id="manage-bench-list" class="manage-bench-list"></div>
+      <div class="confirm-popup-actions">
+        <button type="button" id="manage-bench-submit" class="confirm-btn confirm-yes">Update Bench</button>
+        <button type="button" id="manage-bench-cancel" class="confirm-btn confirm-no">Cancel</button>
+      </div>
+    </div>
+
     <script src="/styles.js"></script>
+    <script src="/benchLogic.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

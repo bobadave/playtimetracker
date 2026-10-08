@@ -271,3 +271,36 @@ test('the roster endpoint computes averageSecondsPerGame over games actually pla
   assert.equal(neverPlayedRoster.gamesPlayed, 0);
   assert.equal(neverPlayedRoster.averageSecondsPerGame, 0, 'a player with zero games played must be 0, not NaN or Infinity');
 });
+
+test('the per-game players endpoint (the data source for the Manage Bench popup) only lists the current team roster, never another team\'s players', async () => {
+  const { cookie } = await registerAndLogIn('ManageBenchTeamScope');
+  const fetchAs = authedFetch(cookie);
+
+  const teamA = await createTeam(fetchAs, 'Manage Bench Team A');
+  const teamB = await createTeam(fetchAs, 'Manage Bench Team B');
+
+  const [a1, a2] = await Promise.all([
+    createPlayer(fetchAs, teamA.id, 'Alpha', 'One'),
+    createPlayer(fetchAs, teamA.id, 'Alpha', 'Two')
+  ]);
+  const [b1, b2] = await Promise.all([
+    createPlayer(fetchAs, teamB.id, 'Beta', 'One'),
+    createPlayer(fetchAs, teamB.id, 'Beta', 'Two')
+  ]);
+
+  const gameA = await createGame(fetchAs, teamA.id, 'Team A Field');
+
+  const rosterForGameA = await (await fetchAs(`/api/players/${gameA.id}?teamId=${teamA.id}`)).json();
+  const rosterIds = rosterForGameA.map((player) => player.id).sort((x, y) => x - y);
+
+  assert.deepEqual(rosterIds, [a1.id, a2.id].sort((x, y) => x - y), "team A's game should list exactly team A's roster");
+  assert.ok(rosterForGameA.every((player) => player.id !== b1.id && player.id !== b2.id), "team B's players must never appear in team A's game");
+
+  // Same check from the other side, confirming this is not a fluke of ID ordering.
+  const gameB = await createGame(fetchAs, teamB.id, 'Team B Field');
+  const rosterForGameB = await (await fetchAs(`/api/players/${gameB.id}?teamId=${teamB.id}`)).json();
+  const rosterBIds = rosterForGameB.map((player) => player.id).sort((x, y) => x - y);
+
+  assert.deepEqual(rosterBIds, [b1.id, b2.id].sort((x, y) => x - y), "team B's game should list exactly team B's roster");
+  assert.ok(rosterForGameB.every((player) => player.id !== a1.id && player.id !== a2.id), "team A's players must never appear in team B's game");
+});

@@ -11,6 +11,7 @@ const {
   endCurrentQuarter,
   getQuarterRows
 } = require('../lib/gameTime');
+const { setAbsentPlayerIds } = require('../lib/attendance');
 
 const router = express.Router();
 
@@ -233,6 +234,37 @@ router.put('/api/game/:gameId/status', async (req, res) => {
   const quarters = await getQuarterRows(gameId);
 
   return res.json({ game: { ...updatedGame, quarters } });
+});
+
+// Sets which players are marked absent for this game only (the Manage Bench popup) —
+// a full sync of the desired absent set, not an incremental add/remove. Absent players
+// are excluded from this game's view entirely; it has no effect on the team roster or
+// any other game.
+router.put('/api/game/:gameId/absences', async (req, res) => {
+  const currentUserId = getSessionUserId(req);
+  if (!currentUserId) {
+    return res.status(401).json({ message: 'Authentication required.' });
+  }
+
+  const { absentPlayerIds } = req.body || {};
+  const gameId = resolveGameId(req.params.gameId);
+
+  if (!Array.isArray(absentPlayerIds) || !absentPlayerIds.every((id) => Number.isFinite(Number(id)))) {
+    return res.status(400).json({ message: 'absentPlayerIds must be an array of player ids.' });
+  }
+
+  const game = await db.get('SELECT * FROM games WHERE id = ?', [gameId]);
+  if (!game) {
+    return res.status(404).json({ message: 'Game not found.' });
+  }
+
+  if (!(await userHasTeamAccess(currentUserId, game.team_id))) {
+    return res.status(403).json({ message: 'You do not have access to this team.' });
+  }
+
+  const savedAbsentPlayerIds = await setAbsentPlayerIds(gameId, game.team_id, absentPlayerIds);
+
+  return res.json({ absentPlayerIds: savedAbsentPlayerIds });
 });
 
 // Immediately ends whichever quarter is currently in progress, without waiting for its

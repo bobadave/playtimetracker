@@ -196,6 +196,19 @@ function createDbApi(databasePath = dbPath) {
       )
     `);
 
+    // A row here means that player is marked absent for that specific game — removed
+    // from the Manage Bench / On Field view entirely for that game only, not from the
+    // team roster. No row = present (the default for every player on every game).
+    await run(`
+      CREATE TABLE IF NOT EXISTS game_absence (
+        game_id INTEGER NOT NULL,
+        player_id INTEGER NOT NULL,
+        PRIMARY KEY (game_id, player_id),
+        FOREIGN KEY (game_id) REFERENCES games(id),
+        FOREIGN KEY (player_id) REFERENCES players(id)
+      )
+    `);
+
     await ensureColumn('games', 'location', 'location TEXT');
     await ensureColumn('games', 'date', 'date TEXT');
     await ensureColumn('games', 'is_active', 'is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))');

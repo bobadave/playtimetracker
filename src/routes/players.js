@@ -7,6 +7,7 @@ const { resolveGameId, enforceQuarterTimeLimit } = require('../lib/gameTime');
 const { getActivitySummaryMap, getCumulativeSummaryMap, getGamesPlayedCountMap } = require('../lib/activity');
 const { getGoalCountMap, getCumulativeGoalMap } = require('../lib/goals');
 const { getStarsCountMaps, getCumulativeStarsMaps } = require('../lib/stars');
+const { getAbsentPlayerIds } = require('../lib/attendance');
 
 const router = express.Router();
 
@@ -189,6 +190,7 @@ router.get('/api/players/:gameId', async (req, res) => {
   const gameSummaryMap = await getActivitySummaryMap(gameId);
   const goalCountMap = await getGoalCountMap(gameId);
   const starsCountMaps = await getStarsCountMaps(gameId);
+  const absentPlayerIds = await getAbsentPlayerIds(gameId);
 
   const payload = players.map((player) => {
     const summary = gameSummaryMap[String(player.id)] || { totalSeconds: 0, isInStage: false };
@@ -205,7 +207,8 @@ router.get('/api/players/:gameId', async (req, res) => {
       goals: goalCountMap[String(player.id)] || 0,
       effort: starsCountMaps.effort[String(player.id)] || 0,
       spirit: starsCountMaps.spirit[String(player.id)] || 0,
-      improvement: starsCountMaps.improvement[String(player.id)] || 0
+      improvement: starsCountMaps.improvement[String(player.id)] || 0,
+      absent: absentPlayerIds.has(player.id)
     };
   });
 

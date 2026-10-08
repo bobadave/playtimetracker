@@ -20,6 +20,11 @@ const starsExplosionEl = document.getElementById('stars-explosion');
 // Matches .popup-overlay's opacity/transform transition duration (0.3s) — the explosion
 // is timed to start only once the stars popup has fully faded out, not on top of it.
 const STARS_POPUP_FADE_MS = 300;
+const manageBenchBtn = document.getElementById('manage-bench-btn');
+const manageBenchPopupEl = document.getElementById('manage-bench-popup');
+const manageBenchListEl = document.getElementById('manage-bench-list');
+const manageBenchSubmitBtn = document.getElementById('manage-bench-submit');
+const manageBenchCancelBtn = document.getElementById('manage-bench-cancel');
 const gameIdDisplayEl = document.getElementById('game-id-display');
 const gameNameDisplayEl = document.getElementById('game-name-display');
 const teamNameDisplayEl = document.getElementById('team-name-display');
@@ -452,13 +457,19 @@ function renderScoreboard(players) {
 }
 
 function renderPlayers(players) {
+  // latestPlayers keeps the FULL team roster, absent players included — Manage Bench
+  // needs to list everyone (so an absent player can be brought back). Everywhere else
+  // (On Field, Bench, scoreboard) works off visiblePlayers instead, since an absent
+  // player's card should not appear anywhere in the game view at all.
   latestPlayers = players;
   lastPlayersFetchMs = Date.now();
 
-  const activePlayers = players.filter((player) => player.inStage);
-  const pausedStagePlayers = players.filter((player) => !player.inStage && pausedFieldPlayerIds.has(player.id));
+  const visiblePlayers = players.filter((player) => !player.absent);
+
+  const activePlayers = visiblePlayers.filter((player) => player.inStage);
+  const pausedStagePlayers = visiblePlayers.filter((player) => !player.inStage && pausedFieldPlayerIds.has(player.id));
   const stagePlayers = [...activePlayers, ...pausedStagePlayers];
-  const orderedPlayers = [...players].sort((a, b) => {
+  const orderedPlayers = [...visiblePlayers].sort((a, b) => {
     if (Number(a.inStage) !== Number(b.inStage)) {
       return Number(a.inStage) - Number(b.inStage);
     }
@@ -469,9 +480,9 @@ function renderPlayers(players) {
 
     return 0;
   });
-  const totalGameSeconds = players.reduce((sum, player) => sum + (Number(player.totalSeconds) || 0), 0);
+  const totalGameSeconds = visiblePlayers.reduce((sum, player) => sum + (Number(player.totalSeconds) || 0), 0);
 
-  renderScoreboard(players);
+  renderScoreboard(visiblePlayers);
 
   stageEl.innerHTML = '';
 
@@ -491,7 +502,7 @@ function renderPlayers(players) {
     stagePlayers.forEach((player) => {
       const isPaused = !player.inStage && pausedFieldPlayerIds.has(player.id);
       const stagePlayer = document.createElement('div');
-      const uiClass = getPlayHighlightClass(player.totalSeconds, players);
+      const uiClass = getPlayHighlightClass(player.totalSeconds, visiblePlayers);
       stagePlayer.className = `stage-player${isPaused ? ' paused' : ''}`;
       if (uiClass) {
         stagePlayer.classList.add(uiClass);
@@ -520,20 +531,27 @@ function renderPlayers(players) {
 
   orderedPlayers.forEach((player) => {
     const playerCard = document.createElement('div');
-    const uiClass = getPlayHighlightClass(player.totalSeconds, players);
-    playerCard.className = `player-card ${player.inStage ? 'active' : ''}`;
+    const uiClass = getPlayHighlightClass(player.totalSeconds, visiblePlayers);
+    // A player can be "on the field" either for real (inStage) or only pending, staged
+    // to go on once the game resumes (pausedFieldPlayerIds) — the bench card should read
+    // the same either way, or a Manage Bench / drag-and-drop change made while paused
+    // looks like it did nothing here even though the On Field panel already reflects it.
+    const isPending = isPendingOnField(player, pausedFieldPlayerIds);
+    const displayOnField = getDisplayOnField(player, pausedFieldPlayerIds);
+    playerCard.className = `player-card ${displayOnField ? 'active' : ''}`;
     if (uiClass) {
       playerCard.classList.add(uiClass);
     }
+    const statusLabel = isPending ? 'On field (pending)' : (player.inStage ? 'On field' : 'Bench');
     playerCard.innerHTML = `
       ${dragHandleHtml}
       <div class="player-meta">
         <span class="player-name">${escapeHtml(player.fullName)}</span>
-        <span class="status-pill ${player.inStage ? 'active' : 'inactive'}">${player.inStage ? 'On field' : 'Bench'}</span>
+        <span class="status-pill ${displayOnField ? 'active' : 'inactive'}">${statusLabel}</span>
       </div>
       <button type="button" class="stars-btn">Stars</button>
       <div class="time-box">
-        ${player.inStage ? '' : `
+        ${displayOnField ? '' : `
         <div class="metric-group">
           <span class="time-label">Share</span>
           <span class="time-value" data-field="share">${formatPercent(player.totalSeconds, totalGameSeconds)}</span>
@@ -581,6 +599,60 @@ async function logPlayerActivity(playerId, inPlay) {
     alert(errorData.message || 'Unable to update player activity.');
     return;
   }
+
+  const updatedPlayers = await fetchPlayers();
+  renderPlayers(updatedPlayers);
+}
+
+function renderManageBenchList() {
+  // Manage Bench lists the FULL team roster, including anyone currently marked absent
+  // — so a coach can bring them back by re-checking their box. The checkbox reflects
+  // each player's actual current status: checked (on the roster for this game) unless
+  // they're already marked absent.
+  const rosterPlayers = latestPlayers.filter((player) => !player.archive);
+  manageBenchListEl.innerHTML = rosterPlayers.map((player) => `
+    <label class="manage-bench-row">
+      <span class="manage-bench-row-name">${escapeHtml(player.fullName)}</span>
+      <input type="checkbox" class="manage-bench-checkbox" data-player-id="${player.id}" ${player.absent ? '' : 'checked'} />
+    </label>
+  `).join('');
+}
+
+function showManageBenchPopup() {
+  renderManageBenchList();
+  manageBenchPopupEl.classList.add('visible');
+}
+
+function hideManageBenchPopup() {
+  manageBenchPopupEl.classList.remove('visible');
+}
+
+async function applyManageBenchChanges() {
+  const checkboxes = Array.from(manageBenchListEl.querySelectorAll('.manage-bench-checkbox'));
+
+  // An unchecked "On Bench" box means that player is taken out of this game entirely —
+  // absent, their card removed from both On Field and Bench — not merely moved to the
+  // field. See the game_absence table / PUT /api/game/:gameId/absences.
+  const absentPlayerIds = checkboxes
+    .filter((checkbox) => !checkbox.checked)
+    .map((checkbox) => Number(checkbox.dataset.playerId));
+
+  const gameId = getCurrentGameId();
+  const response = await fetch(`/api/game/${gameId}/absences`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ absentPlayerIds })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    alert(errorData.message || 'Unable to update the bench.');
+    return;
+  }
+
+  hideManageBenchPopup();
 
   const updatedPlayers = await fetchPlayers();
   renderPlayers(updatedPlayers);
@@ -922,6 +994,12 @@ function setupDropZones() {
     }
   });
   starsPopupCancelBtn.addEventListener('click', () => resolveStarsPopup(null));
+
+  manageBenchBtn.addEventListener('click', showManageBenchPopup);
+  manageBenchCancelBtn.addEventListener('click', hideManageBenchPopup);
+  manageBenchSubmitBtn.addEventListener('click', () => {
+    applyManageBenchChanges();
+  });
 
   gameToggleBtn.addEventListener('click', toggleGameStatus);
   endQuarterBtn.addEventListener('click', handleEndQuarterClick);
